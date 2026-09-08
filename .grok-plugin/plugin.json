@@ -1,0 +1,8 @@
+{
+  "name": "beeper",
+  "version": "0.1.0",
+  "description": "Use Beeper through its official CLI to review chats, find messages and contacts, send replies and attachments, and manage conversations.",
+  "homepage": "https://github.com/beeper/cli",
+  "license": "MIT",
+  "keywords": ["beeper", "beeper cli", "beeper desktop"]
+}
