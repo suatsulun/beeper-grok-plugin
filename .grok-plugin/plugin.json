@@ -1,7 +1,7 @@
 {
   "name": "beeper",
-  "version": "0.2.0",
-  "description": "Connect Grok Build to Beeper Desktop or Beeper Server through MCP to search chats, review unread messages, draft replies, and send messages.",
+  "version": "0.2.1",
+  "description": "Connect Grok Build to Beeper Desktop to search chats, read messages, and send replies through its built-in MCP server.",
   "author": {
     "name": "suatsulun",
     "url": "https://github.com/suatsulun"

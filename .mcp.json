@@ -2,8 +2,7 @@
   "mcpServers": {
     "beeper": {
       "type": "http",
-      "url": "http://localhost:23373/v0/mcp",
-      "bearer_token_env_var": "BEEPER_ACCESS_TOKEN"
+      "url": "http://localhost:23373/v0/mcp"
     }
   }
 }
