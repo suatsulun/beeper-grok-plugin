@@ -1,8 +1,13 @@
 {
   "name": "beeper",
-  "version": "0.1.0",
-  "description": "Use Beeper through its official CLI to review chats, find messages and contacts, send replies and attachments, and manage conversations.",
-  "homepage": "https://github.com/beeper/cli",
+  "version": "0.2.0",
+  "description": "Connect Grok Build to Beeper Desktop or Beeper Server through MCP to search chats, review unread messages, draft replies, and send messages.",
+  "author": {
+    "name": "suatsulun",
+    "url": "https://github.com/suatsulun"
+  },
+  "repository": "https://github.com/suatsulun/beeper-grok-plugin",
+  "homepage": "https://developers.beeper.com/desktop-api/mcp/",
   "license": "MIT",
-  "keywords": ["beeper", "beeper cli", "beeper desktop"]
+  "keywords": ["beeper", "beeper-mcp", "beeper-desktop"]
 }
