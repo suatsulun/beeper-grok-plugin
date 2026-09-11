@@ -137,6 +137,8 @@ class Runtime:
                                     capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             raise Failure("Beeper timed out. Inspect status before retrying a write.", "timeout")
+        if result.returncode and "--webview" in arguments and "Bun.WebView is not available" in result.stdout + result.stderr:
+            raise Failure("This Beeper CLI build cannot open the provider login browser because Bun.WebView is unavailable. Check accounts before retrying; do not substitute a password or cookie form.", "browser_unavailable")
         if "--help" in arguments and result.returncode == 0:
             return {"help": result.stdout}
         try:
@@ -342,7 +344,7 @@ class Runtime:
             raise Failure("Choose a flow ID returned by flows.", "unknown_flow")
         # The official CLI owns the provider's browser-cookie extraction. No
         # extracted cookies, passwords, or raw browser console output are printed.
-        session = self.cli(["accounts", "add", bridge, "--flow", flow, "--webview", "--webview-backend", "chrome", "--non-interactive", "--target", TARGET], timeout=600)
+        session = self.cli(["accounts", "add", bridge, "--flow", flow, "--webview", "--webview-backend", "chrome", "--webview-timeout", "600", "--non-interactive", "--target", TARGET], timeout=660)
         if not session.get("loginSessionID"):
             raise Failure("The CLI browser flow did not return a login session. Check accounts before retrying.", "browser_login_incomplete")
         self.update(network={"bridgeID": bridge, "loginSessionID": session["loginSessionID"]})
@@ -357,7 +359,9 @@ class Runtime:
             result["next"] = "input network"
         if step.get("url"):
             result["step"]["url"] = step["url"]
-            result["next"] = "Complete provider sign-in in the browser; use input network for required cookie fields, or the documented CLI webview flow."
+        if step.get("type") == "cookies":
+            result["next"] = "webview-connect"
+            result["instruction"] = "Use the provider's website through the official CLI browser flow. If this session was started with connect, cancel the pending login before restarting with webview-connect and the chosen flow ID. Do not ask the user to copy cookies."
         display = step.get("display", {})
         if display.get("type") == "qr":
             result["qrImage"] = str(self.render_qr(display["data"]))

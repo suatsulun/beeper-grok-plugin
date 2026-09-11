@@ -14,7 +14,9 @@ Summarize my unread Beeper chats.
 Draft a reply to Alex's latest message.
 ```
 
-Grok installs Server, guides email sign-in and device verification, and presents the network's next login step. Scan QR codes with the appropriate phone app. For codes, passwords, and recovery keys, Grok opens a private form on its computer and lets you take over; enter those values there instead of in chat. Browser-based network sign-in uses Beeper's CLI WebView where available.
+Grok installs Server, guides email sign-in and device verification, and presents the network's next login step. It prefers the network's own website or QR login when the Server offers one; browser-cookie login uses Beeper's CLI WebView to transfer the required session fields. For Beeper account codes, recovery keys, and network input steps, Grok can open a private form on its computer for user takeover. Availability of a browser login must be checked for each network, including Instagram.
+
+Grok's browser runs on its cloud computer. Your local clipboard and password manager are not automatically available there. See [credential handoff options](skills/beeper/references/setup.md#clipboard-and-password-managers); the plugin does not implement clipboard synchronization or a local-browser session transfer.
 
 ## Install the plugin
 

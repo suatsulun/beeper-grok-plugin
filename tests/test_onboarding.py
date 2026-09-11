@@ -468,6 +468,30 @@ clearTimeout(timeout);
         self.assertEqual(post["fields"]["session"], PASSWORD)
         self.assertNotIn(PASSWORD, self.runtime.state_file.read_text())
 
+    def test_cookie_step_directs_to_provider_browser(self):
+        self.authenticate()
+        self.runtime.connect("test-bridge", "password-flow")
+        self.api.network["status"] = "waiting_for_cookies"
+        self.api.network["currentStep"] = {"stepID": "cookies", "type": "cookies", "url": "https://provider.example/login", "fields": [{"id": "session", "type": "cookie"}]}
+        result = self.runtime.network_view(self.api.network)
+        self.assertEqual(result["next"], "webview-connect")
+        self.assertEqual(result["step"]["url"], "https://provider.example/login")
+        self.assertEqual(self.runtime.state()["network"]["loginSessionID"], "network-1")
+        self.assertFalse(any("/steps/" in path for _, path, _, _ in self.api.requests))
+
+    def test_missing_browser_backend_has_safe_specific_error(self):
+        self.authenticate()
+        self.runtime.binary.parent.mkdir(parents=True, exist_ok=True)
+        self.runtime.binary.touch()
+        output = json.dumps({"success": False, "error": "Bun.WebView is not available in this Bun runtime. " + TOKEN})
+        process = subprocess.CompletedProcess([], 1, output, PASSWORD)
+        with patch("beeper.subprocess.run", return_value=process):
+            with self.assertRaises(Failure) as caught:
+                self.runtime.cli(["accounts", "add", "test-bridge", "--webview"])
+        self.assertEqual(caught.exception.code, "browser_unavailable")
+        for secret in (TOKEN, PASSWORD):
+            self.assertNotIn(secret, str(caught.exception))
+
     def test_network_display_poll_advances_and_removes_old_qr(self):
         self.authenticate()
         self.runtime.connect("test-bridge", "password-flow")
@@ -487,6 +511,9 @@ clearTimeout(timeout);
         arguments = cli.call_args.args[0]
         self.assertEqual(arguments[:3], ["accounts", "add", "test-bridge"])
         self.assertIn("--webview", arguments)
+        self.assertEqual(arguments[arguments.index("--webview-backend") + 1], "chrome")
+        self.assertEqual(arguments[arguments.index("--webview-timeout") + 1], "600")
+        self.assertEqual(cli.call_args.kwargs["timeout"], 660)
         self.assertEqual(result["next"], "input network")
         self.assertEqual(self.runtime.state()["network"]["loginSessionID"], "browser-1")
 
