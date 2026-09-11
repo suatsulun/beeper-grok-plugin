@@ -16,7 +16,7 @@ QR_SHA256 = "16e64e0716c14960108e85d853062c9e8bba5ca8252c0b4d0231b9df4060ff4f"
 
 
 def download(url, checksum):
-    request = urllib.request.Request(url, headers={"User-Agent": "beeper-grok-plugin/0.3.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "beeper-grok-plugin/0.4.0"})
     with urllib.request.urlopen(request, timeout=120) as response:
         content = response.read(200 * 1024 * 1024 + 1)
     if len(content) > 200 * 1024 * 1024:
@@ -24,6 +24,26 @@ def download(url, checksum):
     if hashlib.sha256(content).hexdigest() != checksum:
         raise RuntimeError("Download checksum mismatch; nothing was installed.")
     return content
+
+
+def install_tunnel(root):
+    """Optional test relay; only used for a local browser connecting to cloud Server."""
+    checksums = {
+        "x86_64": ("amd64", "03f1f25d1cc93b9ad6c60569d44060bc4f17ed97075760ed8cfca4b12dcd68cc"),
+        "aarch64": ("arm64", "3d97437c71848bd8df68041e12436b484a661d95073ea1937f01a845ce88faa3"),
+    }
+    if platform.system() != "Linux" or platform.machine() not in checksums:
+        raise RuntimeError("The browser relay supports Linux x86_64 and aarch64.")
+    arch, checksum = checksums[platform.machine()]
+    binary = root / "bin/cloudflared-2026.9.1"
+    if not binary.exists() or hashlib.sha256(binary.read_bytes()).hexdigest() != checksum:
+        content = download(f"https://github.com/cloudflare/cloudflared/releases/download/2026.9.1/cloudflared-linux-{arch}", checksum)
+        binary.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        temporary = binary.with_suffix(".part")
+        temporary.write_bytes(content)
+        temporary.chmod(0o700)
+        temporary.replace(binary)
+    return binary
 
 
 def install_tools(root):

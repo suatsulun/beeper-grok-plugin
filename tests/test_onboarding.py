@@ -107,10 +107,10 @@ class FakeBeeper:
         if path.endswith("/login-flows"):
             return 200, {"items": [{"id": "password-flow", "name": "Password"}]}
         if path.endswith("/login-sessions") and method == "POST":
-            self.network = {"bridgeID": "test-bridge", "loginSessionID": "network-1", "status": "waiting_for_input", "currentStep": {"stepID": "password", "type": "user_input", "fields": [{"id": "password", "label": "Password", "type": "password"}]}}
+            self.network = {"bridgeID": "test-bridge", "loginSessionID": "network-1", "status": "waiting_for_input", "currentStep": {"stepID": "phone", "type": "user_input", "fields": [{"id": "phone", "label": "Phone number", "type": "text"}]}}
             return 200, self.network
         if "/steps/" in path:
-            if path.endswith("/password"):
+            if path.endswith("/phone"):
                 self.network["currentStep"] = {"stepID": "otp", "type": "user_input", "fields": [{"id": "otp", "label": "Two-factor code"}]}
             else:
                 self.network.update(status="complete", accountID="account-1", currentStep={"type": "complete"})
@@ -348,7 +348,7 @@ clearTimeout(timeout);
         self.command("connect", "test-bridge", "--flow", "password-flow")
         self.assertEqual(sum(m == "POST" and p.endswith("/login-sessions") for m, p, _, _ in self.api.requests), 1)
         with self.form("network") as form:
-            self.submit_form(form, {"password": PASSWORD})
+            self.submit_form(form, {"phone": "+15550100000"})
         self.assertEqual(self.command("network-show")["data"]["step"]["stepID"], "otp")
         with self.form("network") as form:
             self.submit_form(form, {"otp": EMAIL_CODE})
@@ -361,9 +361,9 @@ clearTimeout(timeout);
         self.authenticate()
         self.runtime.connect("test-bridge", "password-flow")
         with self.form("network") as form:
-            self.api.network["currentStep"]["stepID"] = "new-password-step"
+            self.api.network["currentStep"]["stepID"] = "new-phone-step"
             with self.assertRaises(urllib.error.HTTPError):
-                self.submit_form(form, {"password": PASSWORD})
+                self.submit_form(form, {"phone": "+15550100000"})
         self.assertFalse(any("/steps/" in p for _, p, _, _ in self.api.requests))
 
     def test_disabled_bridge_and_unknown_flow_do_not_create_sessions(self):
@@ -456,17 +456,15 @@ clearTimeout(timeout);
         cli.assert_not_called()
         self.assertFalse(result["serverInstalled"])
 
-    def test_cookie_fields_use_private_form_and_preserve_step_type(self):
+    def test_cookie_fields_cannot_use_private_form(self):
         self.authenticate()
         self.runtime.connect("test-bridge", "password-flow")
         self.api.network["status"] = "waiting_for_cookies"
         self.api.network["currentStep"] = {"stepID": "cookies", "type": "cookies", "url": "https://provider.example/login", "fields": [{"id": "session", "type": "cookie"}]}
-        with self.form("network") as form:
-            self.submit_form(form, {"session": PASSWORD})
-        post = next(body for method, path, body, _ in self.api.requests if method == "POST" and path.endswith("/steps/cookies"))
-        self.assertEqual(post["type"], "cookies")
-        self.assertEqual(post["fields"]["session"], PASSWORD)
-        self.assertNotIn(PASSWORD, self.runtime.state_file.read_text())
+        with self.assertRaises(Failure) as caught:
+            make_server(self.runtime, "network")
+        self.assertEqual(caught.exception.code, "browser_login_required")
+        self.assertFalse(any("/steps/" in p for _, p, _, _ in self.api.requests))
 
     def test_cookie_step_directs_to_provider_browser(self):
         self.authenticate()
@@ -474,7 +472,8 @@ clearTimeout(timeout);
         self.api.network["status"] = "waiting_for_cookies"
         self.api.network["currentStep"] = {"stepID": "cookies", "type": "cookies", "url": "https://provider.example/login", "fields": [{"id": "session", "type": "cookie"}]}
         result = self.runtime.network_view(self.api.network)
-        self.assertEqual(result["next"], "webview-connect")
+        self.assertEqual(result["next"], "browser-start")
+        self.assertEqual(result["browserMode"], "local")
         self.assertEqual(result["step"]["url"], "https://provider.example/login")
         self.assertEqual(self.runtime.state()["network"]["loginSessionID"], "network-1")
         self.assertFalse(any("/steps/" in path for _, path, _, _ in self.api.requests))
@@ -503,19 +502,14 @@ clearTimeout(timeout);
         self.assertFalse((self.root / "network-qr.png").exists())
         self.assertFalse(self.runtime.state().get("network"))
 
-    def test_webview_flow_routes_through_official_cli_and_resumes_input(self):
+    def test_network_password_form_is_blocked(self):
         self.authenticate()
-        output = {"bridgeID": "test-bridge", "loginSessionID": "browser-1", "status": "waiting_for_input", "currentStep": {"type": "user_input", "stepID": "otp", "fields": [{"id": "code"}]}}
-        with patch.object(self.runtime, "cli", return_value=output) as cli:
-            result = self.runtime.webview_connect("test-bridge", "password-flow")
-        arguments = cli.call_args.args[0]
-        self.assertEqual(arguments[:3], ["accounts", "add", "test-bridge"])
-        self.assertIn("--webview", arguments)
-        self.assertEqual(arguments[arguments.index("--webview-backend") + 1], "chrome")
-        self.assertEqual(arguments[arguments.index("--webview-timeout") + 1], "600")
-        self.assertEqual(cli.call_args.kwargs["timeout"], 660)
-        self.assertEqual(result["next"], "input network")
-        self.assertEqual(self.runtime.state()["network"]["loginSessionID"], "browser-1")
+        self.runtime.connect("test-bridge", "password-flow")
+        self.api.network["currentStep"] = {"type": "user_input", "stepID": "password", "fields": [{"id": "password", "type": "password"}]}
+        self.assertEqual(self.runtime.network_view(self.api.network)["next"], "choose-supported-flow")
+        with self.assertRaises(Failure) as caught:
+            self.runtime.input_fields("network")
+        self.assertEqual(caught.exception.code, "browser_unsupported")
 
 
 if __name__ == "__main__":

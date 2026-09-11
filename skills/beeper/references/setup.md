@@ -74,7 +74,7 @@ python3 HELPER connect 'BRIDGE_ID' --flow 'FLOW_ID'
 
 Use exact returned IDs. Reuse a connected account. Multiple matching bridges or multiple accounts may require the user to choose. Respect unavailable/disabled/limit-reached statuses. For reauthentication, use `connect ... --login-id 'EXISTING_LOGIN_ID'`, with an ID returned by Beeper. Never remove the existing account merely to sign in again.
 
-Read the returned flow names and descriptions before choosing. Prefer a provider-website/cookie flow or a QR flow when offered, rather than defaulting to username/password input. Use `webview-connect` for a browser flow, as described below, instead of the `connect` command above. Flow IDs and bridge implementations vary: do not invent an Instagram cookie flow or assume a browser login can replace a mobile-API credentials flow. If only username/password login is available, explain that limitation and let the user choose whether to use it. When the user requests provider-website login, report its unavailability rather than opening the generic credentials form.
+Read the returned flow names and descriptions before choosing. The helper prefers an unambiguous website/cookie flow and defaults to the user's own browser; QR/device-code flows keep their native steps. Flow IDs and bridge implementations vary: do not invent an Instagram cookie flow or assume a browser login can replace a mobile-API credentials flow. If only direct username/password input is available, explain that this bridge needs upstream website-login support. The plugin does not open a generic network password form.
 
 `connect` saves the login session and returns its current step. Only one pending network login is managed at a time:
 
@@ -82,7 +82,7 @@ Read the returned flow names and descriptions before choosing. Prefer a provider
 | --- | --- |
 | `display_and_wait` with QR | Attach the returned `qrImage` PNG, explain the phone app's scanning step, and call `network-poll` after the user scans. |
 | `display_and_wait` with code/emoji/instructions | Present the display and instructions, then `network-poll`. |
-| `user_input` | For a code or a credentials-only flow the user chose, run `input network` and hand over the Bot-local page. Check for a browser alternative before presenting username/password fields. |
+| `user_input` | For native phone/code steps, run `input network` and hand over the Bot-local page. Password/cookie inputs are blocked with an explanation. |
 | `cookies` | Complete provider sign-in using the browser workflow below. Do not request cookies or passwords in chat. |
 | `complete` | Check `accounts` and the returned account's status; then test a scoped chat/message read. |
 | `failed` / `cancelled` | Explain the result and inspect accounts before another attempt. |
@@ -91,15 +91,15 @@ After each input use `network-show`. A terminal input submission may clear the p
 
 ### Browser and cookie-based authentication
 
-For a browser/cookie flow, use the official CLI's browser integration when its Chrome WebView backend is available in the Bot computer:
+For a returned `cookies` step, keep the current session and run:
 
 ```sh
-python3 HELPER webview-connect 'BRIDGE_ID' --flow 'FLOW_ID'
+python3 HELPER browser-start
 ```
 
-Use this before starting `connect`, or cancel the current pending login session first with `network-cancel`. Leave the command running and let the user complete sign-in/MFA on the provider's actual website in the Chrome window opened by Beeper. Browser cookie collection waits up to ten minutes. The official CLI collects the fields specified by that login step and submits them to Beeper; its raw output is captured privately by the helper. Do not dump cookies into the conversation or collect an unrelated browser's sessions. If it returns another code/input step, resume through `input network`.
+Read [browser-login.md](browser-login.md) for extension installation, the encrypted local-browser handoff, and supported field sources. Give the pairing link to the user to open on their own PC. If they choose to sign in on Grok's computer, use `browser-start --browser cloud`; that opens the provider's actual website in a dedicated Chrome profile. Both options resume the pending login, wait up to ten minutes, and submit the required session fields directly to Server. Do not cancel and recreate a login just to switch browser location.
 
-This depends on the CLI build's `Bun.WebView` support and Chrome remote debugging. The plugin does not assume these are present, enable public debugging ports, or bypass provider restrictions. If the browser backend fails, report it and inspect `accounts` before retrying. Do not automatically replace a failed browser login with a cookie-pasting form. Do not claim browser authentication passed until it succeeds in the target Bot environment. The underlying implementation is in [Beeper's account login helper](https://github.com/beeper/cli/blob/main/packages/cli/src/lib/account-login.ts).
+These browser helpers require Node.js 22+ and do not depend on `Bun.WebView`. Unsupported field sources or provider domains produce explicit errors. If a handoff fails or times out, inspect `network-show` and `accounts` before another attempt. Do not claim network authentication passed until the connected account and a scoped read succeed.
 
 ### Clipboard and password managers
 
@@ -107,7 +107,7 @@ The Bot's Chrome runs on a different computer from the user's desktop browser. O
 
 If the user's takeover UI provides a clipboard/paste control, try it first with harmless text. If Grok provides a supported masked secret request for this connection, use that facility; do not invent a tool, claim arbitrary fields are supported, or route the value through ordinary chat. [Grok's credential handoff documentation](https://docs.x.ai/grok-bot/approvals-security-and-privacy) distinguishes secure requests from normal messages.
 
-If neither method is available, explain the limitation and pause credential entry. Password-manager access would have to be configured on the cloud computer separately, or local-browser authentication would need an explicit, scoped session-transfer integration. Do not install or sync the user's password vault, read their local browser cookie databases, upload cookie files in chat, or create a public credential relay as an automatic workaround. A local Instagram login alone cannot supply cookies to the cloud browser.
+For compatible network logins, use the default [local-browser handoff](browser-login.md) so the user signs in with their existing browser and password manager. This transfers only the selected session; it does not synchronize the clipboard. Beeper email/recovery and native phone/code steps still use private input on Grok's computer. If those inputs cannot be entered, explain the limitation and pause that step. Do not sync a password vault, read browser cookie databases, or upload cookie files into chat.
 
 ## Known upstream limits
 

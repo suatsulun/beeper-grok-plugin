@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import struct
 import subprocess
@@ -311,7 +312,7 @@ class Runtime:
     def network_session(self):
         return self.api("GET", self.network_path())
 
-    def connect(self, bridge, flow=None, login_id=None):
+    def connect(self, bridge, flow=None, login_id=None, browser="local"):
         if self.state().get("network"):
             if self.state()["network"]["bridgeID"] != bridge:
                 raise Failure("Another network login is pending. Finish or cancel it before connecting another.", "pending_network")
@@ -324,30 +325,16 @@ class Runtime:
         if flow and not any(f["id"] == flow for f in flows):
             raise Failure("Choose a flow ID returned by flows.", "unknown_flow")
         if not flow and len(flows) > 1:
-            return {"chooseFlow": True, "flows": flows}
+            website_flows = [f for f in flows if re.search(r"\b(browser|website|cookies?)\b", f.get("name", "") + " " + f.get("description", ""), re.I)]
+            if len(website_flows) == 1:
+                flow = website_flows[0]["id"]
+            else:
+                return {"chooseFlow": True, "flows": flows, "browserMode": browser}
         body = {"flowID": flow or flows[0]["id"]} if flows else {}
         if login_id:
             body["loginID"] = login_id
         session = self.api("POST", f"/v1/bridges/{segment(bridge)}/login-sessions", body)
-        self.update(network={"bridgeID": bridge, "loginSessionID": session["loginSessionID"]})
-        return self.network_view(session)
-
-    def webview_connect(self, bridge, flow):
-        self.writable()
-        if self.state().get("network"):
-            raise Failure("Finish or cancel the pending network flow before starting a browser login.", "pending_network")
-        bridges = self.api("GET", "/v1/bridges").get("items", [])
-        if not any(b["id"] == bridge and b["status"] in ("available", "connected") for b in bridges):
-            raise Failure("Choose an available exact bridge ID from networks.", "bridge_unavailable")
-        flows = self.api("GET", f"/v1/bridges/{segment(bridge)}/login-flows").get("items", [])
-        if not any(f["id"] == flow for f in flows):
-            raise Failure("Choose a flow ID returned by flows.", "unknown_flow")
-        # The official CLI owns the provider's browser-cookie extraction. No
-        # extracted cookies, passwords, or raw browser console output are printed.
-        session = self.cli(["accounts", "add", bridge, "--flow", flow, "--webview", "--webview-backend", "chrome", "--webview-timeout", "600", "--non-interactive", "--target", TARGET], timeout=660)
-        if not session.get("loginSessionID"):
-            raise Failure("The CLI browser flow did not return a login session. Check accounts before retrying.", "browser_login_incomplete")
-        self.update(network={"bridgeID": bridge, "loginSessionID": session["loginSessionID"]})
+        self.update(network={"bridgeID": bridge, "loginSessionID": session["loginSessionID"], "browser": browser})
         return self.network_view(session)
 
     def network_view(self, session):
@@ -360,8 +347,12 @@ class Runtime:
         if step.get("url"):
             result["step"]["url"] = step["url"]
         if step.get("type") == "cookies":
-            result["next"] = "webview-connect"
-            result["instruction"] = "Use the provider's website through the official CLI browser flow. If this session was started with connect, cancel the pending login before restarting with webview-connect and the chosen flow ID. Do not ask the user to copy cookies."
+            result["next"] = "browser-start"
+            result["browserMode"] = self.state().get("network", {}).get("browser", "local")
+            result["instruction"] = "Run browser-start for this pending session. Default: pair the user's own browser with Beeper Browser Connect. Use --browser cloud only if they choose the Grok computer. Both use the provider website; never request cookies in chat."
+        if step.get("type") == "user_input" and self.credential_fields(step.get("fields", [])):
+            result["next"] = "choose-supported-flow"
+            result["instruction"] = "This flow requires direct network credentials. The plugin uses provider websites for password sign-in. Inspect flows for a supported website or QR option; if none exists, explain that this Server bridge cannot use browser login."
         display = step.get("display", {})
         if display.get("type") == "qr":
             result["qrImage"] = str(self.render_qr(display["data"]))
@@ -420,9 +411,23 @@ class Runtime:
         if kind == "network":
             session = self.network_session()
             step = session.get("currentStep") or {}
-            if step.get("type") in ("user_input", "cookies"):
+            if step.get("type") == "cookies":
+                raise Failure("Use browser-start to sign in on the provider website.", "browser_login_required")
+            if self.credential_fields(step.get("fields", [])):
+                raise Failure("This network flow requires direct credentials. Choose a supported provider-website or QR flow; network passwords and cookies are not collected in plugin forms.", "browser_unsupported")
+            if step.get("type") == "user_input":
                 return step["fields"], (session["loginSessionID"], step["stepID"])
         raise Failure("There is no matching input step pending. Check status.", "no_pending_input")
+
+    @staticmethod
+    def credential_fields(fields):
+        for field in fields:
+            name = (field.get("id", "") + " " + field.get("label", "")).lower()
+            if re.search(r"\busername\b|password|cookie|\btoken\b|session.?token|access.?token|secret", name):
+                return True
+            if field.get("type") == "password" and not re.search(r"\botp\b|\bcode\b|one.time|verification", name):
+                return True
+        return False
 
     def submit_input(self, kind, fields, snapshot):
         self.writable()
@@ -471,7 +476,11 @@ def main():
     p.add_argument("bridge")
     p.add_argument("--flow")
     p.add_argument("--login-id")
-    p = commands.add_parser("webview-connect", help="Use the official CLI's Chrome webview for a browser login flow")
+    p.add_argument("--browser", choices=("local", "cloud"), default="local")
+    p = commands.add_parser("browser-start", help="Complete the pending website login using your own browser by default")
+    p.add_argument("--browser", choices=("local", "cloud"))
+    p.add_argument("--loopback", action="store_true", help="Local browser and Server are on this same computer; do not start a relay")
+    p = commands.add_parser("webview-connect", help="Compatibility alias: connect and use the provider website on this computer")
     p.add_argument("bridge")
     p.add_argument("--flow", required=True)
     p = commands.add_parser("input", help="Run a temporary private browser form; leave the process running")
@@ -484,6 +493,20 @@ def main():
         if args.command == "input":
             from private_input import serve
             serve(runtime, args.kind)
+            return
+        if args.command in ("browser-start", "webview-connect"):
+            from browser_login import serve
+            if args.command == "webview-connect":
+                with runtime.lock():
+                    result = runtime.connect(args.bridge, args.flow, browser="cloud")
+                if result.get("next") != "browser-start":
+                    emit({"success": True, "data": redact(result)})
+                    return
+                code = serve(runtime, "cloud")
+            else:
+                code = serve(runtime, args.browser, args.loopback)
+            if code:
+                sys.exit(code)
             return
         with runtime.lock():
             c = args.command
@@ -510,9 +533,7 @@ def main():
             elif c == "flows":
                 result = runtime.api("GET", f"/v1/bridges/{segment(args.bridge)}/login-flows")
             elif c == "connect":
-                result = runtime.connect(args.bridge, args.flow, args.login_id)
-            elif c == "webview-connect":
-                result = runtime.webview_connect(args.bridge, args.flow)
+                result = runtime.connect(args.bridge, args.flow, args.login_id, args.browser)
             elif c == "network-show":
                 result = runtime.network_view(runtime.network_session())
             elif c == "network-poll":

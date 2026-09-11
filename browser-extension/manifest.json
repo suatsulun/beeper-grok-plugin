@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Beeper Browser Connect",
+  "version": "0.4.0",
+  "description": "Connect a selected website session to your Beeper Server through an encrypted, temporary handoff.",
+  "minimum_chrome_version": "120",
+  "icons": {"128": "icon.png"},
+  "permissions": ["cookies", "storage", "activeTab", "scripting", "alarms", "webRequest"],
+  "optional_host_permissions": [
+    "https://*.instagram.com/*", "https://*.facebook.com/*", "https://*.messenger.com/*",
+    "https://*.linkedin.com/*", "https://*.x.com/*", "https://*.twitter.com/*",
+    "https://*.discord.com/*", "https://*.discordapp.com/*", "https://*.slack.com/*",
+    "https://*.trycloudflare.com/*", "http://127.0.0.1/*"
+  ],
+  "background": {"service_worker": "background.mjs", "type": "module"},
+  "action": {"default_title": "Beeper Browser Connect", "default_popup": "popup.html", "default_icon": "icon.png"}
+}
