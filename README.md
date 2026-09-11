@@ -48,7 +48,7 @@ The helper downloads tools from `github.com/beeper/cli/releases` and `files.pyth
 
 ## Validation status
 
-This version implements the Server onboarding workflow. Its 24 automated tests cover authentication state, verification, private input, network login transitions, and installation recovery. **A full run in an actual Grok Bot computer is still required before marketplace submission.** See the [test procedure](tests/README.md).
+This version implements the Server onboarding workflow. Automated tests cover authentication state, verification, private input, network login transitions, and installation recovery. An optional Chrome test checks native browser form submission. **A full run in an actual Grok Bot computer is still required before marketplace submission.** See the [test procedure](tests/README.md).
 
 Beeper's current Server installer downloads a nightly artifact. Upstream issues affecting device verification and headless chat availability are documented in the [setup guide](skills/beeper/references/setup.md#known-upstream-limits), along with the implemented verification workaround. Network support depends on the bridges available on the Server and the login facilities in the Bot computer; the plugin does not claim every network is tested.
 

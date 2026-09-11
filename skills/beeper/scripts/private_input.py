@@ -29,7 +29,10 @@ def make_server(runtime, kind):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(encoded)))
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Referrer-Policy", "no-referrer")
+            # no-referrer makes native form POSTs send Origin: null, which our
+            # origin check must reject. Keep same-origin POSTs identifiable
+            # while withholding the private URL from other origins.
+            self.send_header("Referrer-Policy", "same-origin")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
             self.end_headers()

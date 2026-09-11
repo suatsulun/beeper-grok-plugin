@@ -12,6 +12,16 @@ git diff --check
 
 Tests use temporary directories under the user's disk-backed cache and a fake loopback Beeper API. They do not install Server, authenticate a real account, read conversations, or send messages.
 
+To test native browser form submission, install Chrome/Chromium and Node 22+ on the test machine, then run this optional test from the repository root:
+
+```sh
+BEEPER_BROWSER_TEST=1 python3 -m unittest discover -s tests -p test_onboarding.py -k test_private_email_form_in_chrome -v
+```
+
+It uses a fresh headless browser profile and synthetic credentials against the fake API. The browser generates the request headers itself. This reproduces the v0.3.0 sign-in rejection: `Referrer-Policy: no-referrer` caused native form POSTs to send `Origin: null`, which the strict origin check rejected. Version 0.3.1 uses `same-origin`, retaining the origin on same-page POSTs and withholding referrers from other origins. Host, origin, and CSRF-token checks remain enforced.
+
+When updating an existing Bot test to v0.3.1, replace the plugin source files, stop only the old private-input command, and run `input email` again to open a fresh page. Reuse `/workspace/.beeper-grok` and the pending login request. Do not rerun bootstrap or delete authentication state for this form fix. If Beeper reports that the email request expired, use the normal cancel-and-restart login flow.
+
 The real tool download can be checked independently with `bootstrap --cli-only` in an isolated `BEEPER_PLUGIN_HOME`. This downloads CLI and QR support but never installs/starts Server. Delete that test directory afterward if a clean machine is required.
 
 ## Acceptance in a fresh Grok Bot computer
