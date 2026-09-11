@@ -1,11 +1,7 @@
-// Shared by the extension and the receiver. No bridge-supplied JavaScript runs.
+// Validate provider requirements and collect only named fields. Never run bridge-supplied JavaScript.
 const encoder = new TextEncoder();
-// Chrome's session storage can reorder object keys. Authentication must bind
-// the same descriptor regardless of object insertion order.
+// Compare plans independently of object insertion order.
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
-export const label = 'beeper-browser-handoff-v1';
-export const b64 = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-export const unb64 = text => Uint8Array.from(atob(text.replaceAll('-', '+').replaceAll('_', '/')), c => c.charCodeAt(0));
 export const inDomain = (host, domain) => host === domain || host.endsWith('.' + domain);
 function check(ok) { if (!ok) throw new Error('Unsupported or invalid browser login requirements.'); }
 export function safeRegex(pattern) {
@@ -76,43 +72,4 @@ export function selectFields(plan, cookies, storage = {}, headers = {}) {
     if (typeof value === 'string' && value.length > 0 && value.length <= 16384 && (!f.pattern || safeRegex(f.pattern).test(value))) { fields[f.id] = value; break; }
   }
   return fields;
-}
-export async function context(descriptor) {
-  return new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(JSON.stringify(canonical(descriptor)))));
-}
-async function aesKey(privateKey, publicKey, salt) {
-  const secret = await crypto.subtle.deriveBits({name:'ECDH', public:publicKey}, privateKey, 256);
-  const material = await crypto.subtle.importKey('raw', secret, 'HKDF', false, ['deriveKey']);
-  return crypto.subtle.deriveKey({name:'HKDF', hash:'SHA-256', salt, info:encoder.encode(label)}, material, {name:'AES-GCM', length:256}, false, ['encrypt','decrypt']);
-}
-export async function keypair() {
-  const pair = await crypto.subtle.generateKey({name:'ECDH', namedCurve:'P-256'}, true, ['deriveBits']);
-  return {privateKey:await crypto.subtle.exportKey('jwk', pair.privateKey), publicKey:b64(await crypto.subtle.exportKey('raw', pair.publicKey))};
-}
-export async function encrypt(descriptor, payload) {
-  check(encoder.encode(JSON.stringify(payload)).length <= 65536);
-  const pair = await crypto.subtle.generateKey({name:'ECDH', namedCurve:'P-256'}, false, ['deriveBits']);
-  const receiver = await crypto.subtle.importKey('raw', unb64(descriptor.publicKey), {name:'ECDH', namedCurve:'P-256'}, false, []);
-  const binding = await context(descriptor);
-  const key = await aesKey(pair.privateKey, receiver, binding);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  return {publicKey:b64(await crypto.subtle.exportKey('raw', pair.publicKey)), iv:b64(iv), ciphertext:b64(await crypto.subtle.encrypt({name:'AES-GCM', iv, additionalData:binding}, key, encoder.encode(JSON.stringify(payload))))};
-}
-export async function decrypt(descriptor, privateJWK, envelope) {
-  const privateKey = await crypto.subtle.importKey('jwk', privateJWK, {name:'ECDH', namedCurve:'P-256'}, false, ['deriveBits']);
-  const sender = await crypto.subtle.importKey('raw', unb64(envelope.publicKey), {name:'ECDH', namedCurve:'P-256'}, false, []);
-  const binding = await context(descriptor);
-  const key = await aesKey(privateKey, sender, binding);
-  return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM', iv:unb64(envelope.iv), additionalData:binding}, key, unb64(envelope.ciphertext))));
-}
-export function pairingLink(raw, providers) {
-  const url = new URL(raw);
-  check((url.protocol === 'https:' && /^[a-z0-9-]+\.trycloudflare\.com$/.test(url.hostname) && !url.port) || (url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.port));
-  check(!url.username && !url.password && url.pathname === '/connect' && !url.search && url.hash.length < 32768);
-  const descriptor = JSON.parse(new TextDecoder().decode(unb64(url.hash.slice(1))));
-  check(descriptor.version === 1 && descriptor.origin === url.origin && /^[\w-]{40,64}$/.test(descriptor.capability) && /^[\w-]{20,64}$/.test(descriptor.id));
-  check(descriptor.expires > Date.now() && descriptor.expires <= Date.now() + 660000);
-  check(unb64(descriptor.publicKey).length === 65);
-  validatePlan(descriptor.plan, providers);
-  return descriptor;
 }

@@ -312,7 +312,7 @@ class Runtime:
     def network_session(self):
         return self.api("GET", self.network_path())
 
-    def connect(self, bridge, flow=None, login_id=None, browser="local"):
+    def connect(self, bridge, flow=None, login_id=None, browser="auto"):
         if self.state().get("network"):
             if self.state()["network"]["bridgeID"] != bridge:
                 raise Failure("Another network login is pending. Finish or cancel it before connecting another.", "pending_network")
@@ -348,8 +348,8 @@ class Runtime:
             result["step"]["url"] = step["url"]
         if step.get("type") == "cookies":
             result["next"] = "browser-start"
-            result["browserMode"] = self.state().get("network", {}).get("browser", "local")
-            result["instruction"] = "Run browser-start for this pending session. Default: pair the user's own browser with Beeper Browser Connect. Use --browser cloud only if they choose the Grok computer. Both use the provider website; never request cookies in chat."
+            result["browserMode"] = self.state().get("network", {}).get("browser", "auto")
+            result["instruction"] = "Read browser-login.md. Prefer Grok's built-in cookie approval/import when available with its receiving browser endpoint; otherwise offer provider-website login on Grok's computer. No extension, relay, or Node upgrade is needed. Never request cookies in chat."
         if step.get("type") == "user_input" and self.credential_fields(step.get("fields", [])):
             result["next"] = "choose-supported-flow"
             result["instruction"] = "This flow requires direct network credentials. The plugin uses provider websites for password sign-in. Inspect flows for a supported website or QR option; if none exists, explain that this Server bridge cannot use browser login."
@@ -466,6 +466,8 @@ def main():
     p.add_argument("--cli-only", action="store_true")
     for name in ("status", "start", "stop", "accounts", "networks", "login-cancel", "verify-start", "verify-show", "verify-accept", "verify-sas", "verify-cancel", "network-show", "network-poll", "network-cancel"):
         commands.add_parser(name)
+    commands.add_parser("browser-check", help="Check the existing browser runtime without downloads or sign-in")
+    commands.add_parser("browser-plan", help="Show the selected provider and origins for native Grok approval")
     p = commands.add_parser("login")
     p.add_argument("--email", required=True)
     p = commands.add_parser("verify-confirm")
@@ -476,10 +478,10 @@ def main():
     p.add_argument("bridge")
     p.add_argument("--flow")
     p.add_argument("--login-id")
-    p.add_argument("--browser", choices=("local", "cloud"), default="local")
-    p = commands.add_parser("browser-start", help="Complete the pending website login using your own browser by default")
-    p.add_argument("--browser", choices=("local", "cloud"))
-    p.add_argument("--loopback", action="store_true", help="Local browser and Server are on this same computer; do not start a relay")
+    p.add_argument("--browser", choices=("auto", "native", "cloud", "local"), default="auto")
+    p = commands.add_parser("browser-start", help="Complete the pending provider website login without extra installs")
+    p.add_argument("--browser", choices=("auto", "native", "cloud", "local"))
+    p.add_argument("--cdp-url", help="Exact loopback cloud-browser endpoint supplied by Grok after native import")
     p = commands.add_parser("webview-connect", help="Compatibility alias: connect and use the provider website on this computer")
     p.add_argument("bridge")
     p.add_argument("--flow", required=True)
@@ -490,6 +492,15 @@ def main():
     args = parser.parse_args()
     runtime = Runtime()
     try:
+        if args.command == "browser-check":
+            from browser_login import readiness
+            emit({"success": True, "data": readiness()})
+            return
+        if args.command == "browser-plan":
+            from browser_login import describe
+            with runtime.lock():
+                emit({"success": True, "data": describe(runtime)})
+            return
         if args.command == "input":
             from private_input import serve
             serve(runtime, args.kind)
@@ -504,7 +515,7 @@ def main():
                     return
                 code = serve(runtime, "cloud")
             else:
-                code = serve(runtime, args.browser, args.loopback)
+                code = serve(runtime, args.browser, args.cdp_url)
             if code:
                 sys.exit(code)
             return

@@ -1,51 +1,56 @@
 # Sign in on a provider website
 
-Use the `cookies` step returned by this Server, with its existing saved login session. Do not invent flow IDs or convert a password/mobile-API flow into a cookie flow.
+Use the current `cookies` step returned by Server. Do not invent flow IDs or turn a password/mobile-API flow into a cookie flow. Keep the existing login transaction.
 
-## Default: the user's own browser
+## Check the existing environment
 
 ```sh
-python3 HELPER browser-start
+python3 HELPER browser-check
+python3 HELPER browser-plan
 ```
 
-Keep the command running in a yielding/background tool. It starts a temporary encrypted handoff and prints `pairingURL`. Give that link to the user to open **on their own PC**, where their password manager and signed-in accounts live. The pairing capability is temporary; share it only in this private conversation. Do not fetch/log its fragment or expose it in public messages.
+`browser-check` reports the PATH Node version, browser-module readiness, built-in WebSocket availability, and an existing Chrome executable. It makes no downloads or account requests. Grok's **Node 20.19.2 is supported**; the helper enables its built-in WebSocket flag when needed. There are no npm dependencies or Node installers. Beeper Server's embedded Node is separate. If the check fails, report the specific missing capability; do not ask users to install runtimes, browsers, extensions, or relays.
 
-If the companion extension is not installed, provide the plugin ZIP or the `browser-extension` folder. The user enables Developer mode at `chrome://extensions` or `edge://extensions`, chooses **Load unpacked**, and selects that folder. Installation is a one-time user step; do not claim the plugin can silently install extensions into their local browser.
+`browser-plan` validates the pending step and returns its provider, login URL, and scoped origins. It returns no credentials and does not start another login.
 
-On the pairing page, they open **Beeper Browser Connect**, review the provider/destination, and click **Open website and connect**. The extension asks for the selected site's permissions and opens its real website. It uses the account already signed in there, or waits for the user to finish password/MFA sign-in. It automatically transfers only the requested session fields, encrypted to the receiver. No cookie copy/paste or password-manager transfer to Grok is needed.
+## Prefer native Grok import when available
 
-The command returns the next network step after submission. Check `network-show` if a session remains, then `accounts`. A successful handoff means fields were submitted; only a connected account and a scoped read establish that messaging works.
+First check the actual capabilities exposed to this Bot. Grok must provide **both** a supported cookie approval/import facility for the user's browser and access to the **receiving cloud Chrome's loopback CDP endpoint**. Native import is platform/account dependent and may be feature-gated. A desktop app containing import code is not proof that this Bot can call it. Do not invent a tool name, invoke private desktop RPCs, enable hidden feature gates, or inspect protected app credentials.
 
-## Alternative: Grok's computer
+When both capabilities are available:
 
-Only when the user chooses it:
+1. Ask Grok's native facility to import only the selected provider origins from `browser-plan`. Let the user choose the browser/profile and approve access. Honor denial or cancellation. Do not collect raw cookie values into tool output or chat.
+2. Use the receiving browser endpoint supplied by Grok's supported browser environment. Never guess or scan ports, attach to a browser on the user's PC, copy its profile, or launch their browser with debugging enabled.
+3. After approved import, run the following, substituting the **actual supplied port**:
+
+```sh
+python3 HELPER browser-start --browser native --cdp-url http://127.0.0.1:PORT
+```
+
+This opens a new provider tab in that receiving browser, waits for the required fields, and submits them privately to Beeper Server. It closes its own tab when finished and leaves Grok's browser and other tabs open. The endpoint is not persisted. Existing cookies can restore website sessions; native import does not promise transfer of local storage, hardware-bound credentials, or MFA. Further website sign-in may be necessary.
+
+This is a conditional integration point, not a built-in replacement for Grok's import facility. If either capability is unavailable, say so and offer website sign-in below. If the user requires their own PC only, stop that connection with this specific limitation. Do not reintroduce extension installation or cookie-file uploads.
+
+## Provider website on Grok's computer
 
 ```sh
 python3 HELPER browser-start --browser cloud
 ```
 
-This resumes the same pending login and opens the provider website in a dedicated Chrome/Chromium window on the Bot computer. Let the user take over that window for sign-in and MFA. The helper collects the required session fields and submits them directly to the local Beeper API. It needs Node.js 22+, Chrome/Chromium, and a graphical desktop. `BEEPER_CHROME_BINARY` may select the installed Chrome executable. It does not depend on CLI 0.6.2's `Bun.WebView` support.
+Keep the command running in a yielding/background tool. It opens the provider website in a dedicated Chrome/Chromium window on the Bot computer. Hand over that window for sign-in and MFA. The helper automatically submits only the requested fields directly to Server; it never asks for a network password in a plugin form.
 
-The browser uses a private persistent profile under `browser-profiles/PROVIDER` in the plugin data directory. Chrome debugging uses private process pipes, not a network port. The owned browser closes when done or cancelled. The user's PC clipboard/password manager is still separate from this cloud browser. Default to the local-browser option when that separation prevents sign-in; never collect passwords in chat.
+The helper uses the existing Chrome, a graphical desktop, and Node. `BEEPER_CHROME_BINARY` can select an already installed executable. Chrome uses a private persistent profile under `browser-profiles/PROVIDER` in the plugin data directory, with private debugging pipes. It closes on completion or cancellation. No relay or extension is involved.
 
-`connect BRIDGE --flow FLOW --browser cloud` saves this choice for that transaction. `webview-connect BRIDGE --flow FLOW` remains a compatibility alias for connecting and starting this cloud option.
+For a new transaction, plain `browser-start` opens this website unless given a native endpoint. The skill checks native-import availability first. `connect BRIDGE --flow FLOW --browser native|cloud` saves a preference. A saved native preference always requires the endpoint; it never silently falls back. Legacy `local` preferences map to native import, preserving pending v0.4 sessions without reinstalling the old companion. `webview-connect BRIDGE --flow FLOW` is a compatibility alias for the cloud website option.
 
-## Compatibility
+Grok's cloud browser cannot automatically use the PC's clipboard or password manager. Use a supported Grok paste/secret-input facility only when exposed for this interaction; otherwise explain the limitation. Never ask for passwords, cookies, or recovery keys in ordinary chat. The plugin alone cannot supply cross-computer clipboard transport.
 
-The provider registry covers Instagram, Facebook/Messenger, LinkedIn, X/Twitter, Discord, and Slack domains. Both browser options support named cookies (including HttpOnly), named local-storage entries, and named HTTP request headers from the selected provider's login tab. The live Server must offer a `cookies` step with compatible field sources. These domain adapters are not a claim of live-tested network support.
+## Compatibility and recovery
 
-Required `special` sources or arbitrary `extractJS` are unsupported unless the same field has a supported alternative source. Domain escapes, malformed requirements and unsupported regular expressions are rejected. There is no generic password/cookie-form fallback. If only direct username/password API login exists, explain that this bridge needs upstream website-login support and stop that connection. QR/device-code/phone-code flows retain their native steps; Beeper email/registration/recovery uses its existing private forms.
+The provider registry covers Instagram, Facebook/Messenger, LinkedIn, X/Twitter, Discord, and Slack domains. The live Server must offer a compatible `cookies` step. Domain adapters do not establish live-tested network support. The collector supports named cookies (including HttpOnly), local-storage entries, and request headers from the new selected-provider tab, with domain/URL and field checks before submission. Required custom `special` extraction is unsupported unless the field has a supported alternative. Bridge-supplied `extractJS` never runs.
 
-## Transport and recovery
+If only username/password API login exists, explain that the bridge needs upstream website-login support. QR/device-code/phone-code flows keep their native steps. Beeper email/registration/recovery keeps its private forms.
 
-The default cloud handoff uses checksum-pinned cloudflared 2026.9.1 and a temporary `trycloudflare.com` address. Only the separate handoff receiver is exposed; the Beeper API remains on loopback. Session fields use ECDH P-256, HKDF-SHA-256, and AES-256-GCM, with the pairing descriptor bound as authenticated context. Cloudflare carries ciphertext and metadata; only the receiver has the private key. Links expire in ten minutes and are consumed before submitting to Beeper. The receiver checks that the pending login step is still the same.
+Browser collection expires after ten minutes. `network-cancel` ends the saved Server login and stops the waiting helper. On error, cancellation, expiry, or uncertain API delivery, inspect `network-show` and `accounts` before retrying; never automatically repeat a submission. The helper verifies the pending step has not changed before sending fields. A successful submission is not proof of a connected network: check the account state and a scoped chat read.
 
-Cloudflare Quick Tunnels are a **testing transport**, without an uptime guarantee. Production distribution needs a supported relay service. The helper uses HTTP/2 and requires outbound TCP 7844 to Cloudflare, as well as HTTPS for the pairing page. It waits for a registered tunnel connection before issuing the link. If a relay cannot start, explain the error; offer the cloud-browser option without silently switching.
-
-For local Grok CLI testing where browser and Server are on the same PC, `browser-start --loopback` avoids the relay. Do not use this flag when the user's browser is on another computer.
-
-Cancel in the extension to stop collection. Use `network-cancel` in the helper to cancel the Server transaction and stop its waiting handoff. Close/cancel the running helper to end only the handoff. On expiry, use `network-show` before starting a fresh handoff. A failed/uncertain delivery is never automatically repeated: inspect `network-show` and `accounts` first. Site permission denial collects nothing. The user can revoke granted site permissions or remove the extension through their browser's extension settings.
-
-If the pairing page shows a certificate warning or a router page, stop that handoff. The network may be redirecting or filtering the relay hostname. Do not disable TLS verification, bypass a certificate warning, or change the user's DNS/router controls automatically. Report the observed failure; local-browser transfer needs a relay that the user's browser can reach with a valid HTTPS certificate. The explicitly chosen cloud-browser option does not use this relay.
-
-Sources: [Chrome cookies API](https://developer.chrome.com/docs/extensions/reference/api/cookies), [Chrome optional permissions](https://developer.chrome.com/docs/extensions/reference/api/permissions), [Beeper login step API](https://github.com/beeper/desktop-api-js/blob/next/src/resources/bridges/login-sessions/steps.ts), [Cloudflare Quick Tunnels](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
+Source: [Beeper login step API](https://github.com/beeper/desktop-api-js/blob/next/src/resources/bridges/login-sessions/steps.ts).

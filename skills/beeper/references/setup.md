@@ -91,15 +91,16 @@ After each input use `network-show`. A terminal input submission may clear the p
 
 ### Browser and cookie-based authentication
 
-For a returned `cookies` step, keep the current session and run:
+For a returned `cookies` step, keep the current session and read [browser-login.md](browser-login.md). Check the runtime and selected provider:
 
 ```sh
-python3 HELPER browser-start
+python3 HELPER browser-check
+python3 HELPER browser-plan
 ```
 
-Read [browser-login.md](browser-login.md) for extension installation, the encrypted local-browser handoff, and supported field sources. Give the pairing link to the user to open on their own PC. If they choose to sign in on Grok's computer, use `browser-start --browser cloud`; that opens the provider's actual website in a dedicated Chrome profile. Both options resume the pending login, wait up to ten minutes, and submit the required session fields directly to Server. Do not cancel and recreate a login just to switch browser location.
+Prefer Grok's native, approved cookie import when Grok exposes it and the receiving cloud-browser endpoint. Otherwise offer `browser-start --browser cloud` to open the provider's actual website on Grok's computer. There is no extension or relay to install. Existing Node 20.19.2 works; do not request a Node upgrade. The helper does not depend on `Bun.WebView`.
 
-These browser helpers require Node.js 22+ and do not depend on `Bun.WebView`. Unsupported field sources or provider domains produce explicit errors. If a handoff fails or times out, inspect `network-show` and `accounts` before another attempt. Do not claim network authentication passed until the connected account and a scoped read succeed.
+Both paths resume the saved login and submit only the required fields to Server. Do not cancel and recreate a login merely to switch browser modes. If a browser attempt fails or times out, inspect `network-show` and `accounts` before another attempt. Unsupported fields or providers produce explicit errors. Connected accounts and a scoped read establish successful network setup.
 
 ### Clipboard and password managers
 
@@ -107,7 +108,7 @@ The Bot's Chrome runs on a different computer from the user's desktop browser. O
 
 If the user's takeover UI provides a clipboard/paste control, try it first with harmless text. If Grok provides a supported masked secret request for this connection, use that facility; do not invent a tool, claim arbitrary fields are supported, or route the value through ordinary chat. [Grok's credential handoff documentation](https://docs.x.ai/grok-bot/approvals-security-and-privacy) distinguishes secure requests from normal messages.
 
-For compatible network logins, use the default [local-browser handoff](browser-login.md) so the user signs in with their existing browser and password manager. This transfers only the selected session; it does not synchronize the clipboard. Beeper email/recovery and native phone/code steps still use private input on Grok's computer. If those inputs cannot be entered, explain the limitation and pause that step. Do not sync a password vault, read browser cookie databases, or upload cookie files into chat.
+For compatible network logins, prefer [Grok's native cookie import](browser-login.md) if available, so the user can reuse their own browser session. It does not synchronize the clipboard. If Grok does not expose native import, the plugin cannot access the user's browser from the cloud without another component; explain that limitation and offer provider-site sign-in in Grok. Beeper email/recovery and native phone/code steps still use private input on Grok's computer. If those inputs cannot be entered, explain the limitation and pause that step. Do not sync a password vault, read browser cookie databases, or upload cookie files into chat.
 
 ## Known upstream limits
 

@@ -221,86 +221,23 @@ class OnboardingTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("BEEPER_BROWSER_TEST") == "1", "Opt-in Chrome form test")
     def test_private_email_form_in_chrome(self):
-        # Let a real browser generate Origin from the page's response policy.
-        # HTTP-only tests supply Origin themselves and miss no-referrer -> null.
-        chrome = shutil.which("google-chrome") or shutil.which("chromium")
+        # Reuse the pipe-based browser driver so this test also runs on Node 20.
+        chrome = os.environ.get("BEEPER_TEST_CHROME") or shutil.which("google-chrome") or shutil.which("chromium")
         node = shutil.which("node")
-        self.assertTrue(chrome and node, "Browser test requires Chrome/Chromium and Node 22+")
+        self.assertTrue(chrome and node, "Browser test requires existing Chrome/Chromium and Node 20+")
         self.runtime.login("test@example.org")
-        profile = self.root / "browser-profile"
-        with self.form("email") as form, subprocess.Popen([
-            chrome, "--headless=new", "--remote-debugging-port=0",
-            "--no-first-run", "--no-default-browser-check", "--disable-background-networking",
-            "--disable-extensions", "--disable-sync", f"--user-data-dir={profile}", "about:blank",
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as browser:
-            try:
-                port_file = profile / "DevToolsActivePort"
-                deadline = time.monotonic() + 10
-                while not port_file.exists() and browser.poll() is None and time.monotonic() < deadline:
-                    time.sleep(0.05)
-                self.assertTrue(port_file.exists(), "Chrome did not start its test endpoint")
-                port = int(port_file.read_text().splitlines()[0])
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=5) as response:
-                    page = next(item for item in json.load(response) if item["type"] == "page")
-                script = r'''
-const [endpoint, url, code] = process.argv.slice(1);
-const socket = new WebSocket(endpoint);
-const pending = new Map(), events = new Map();
-let serial = 0;
-const timeout = setTimeout(() => { console.error("Browser form test timed out"); process.exit(1); }, 15000);
-socket.addEventListener("message", ({ data }) => {
-    const message = JSON.parse(data);
-    if (message.id && pending.has(message.id)) {
-        const { resolve, reject } = pending.get(message.id);
-        pending.delete(message.id);
-        message.error ? reject(new Error(message.error.message)) : resolve(message.result);
-    } else if (events.has(message.method)) {
-        events.get(message.method)(message.params);
-        events.delete(message.method);
-    }
-});
-const call = (method, params = {}) => new Promise((resolve, reject) => {
-    const id = ++serial;
-    pending.set(id, { resolve, reject });
-    socket.send(JSON.stringify({ id, method, params }));
-});
-const once = method => new Promise(resolve => events.set(method, resolve));
-await new Promise((resolve, reject) => {
-    socket.addEventListener("open", resolve, { once: true });
-    socket.addEventListener("error", reject, { once: true });
-});
-await call("Page.enable");
-let loaded = once("Page.loadEventFired");
-await call("Page.navigate", { url });
-await loaded;
-await call("Runtime.evaluate", { expression: "document.querySelector('[name=code]').focus()" });
-await call("Input.insertText", { text: code });
-loaded = once("Page.loadEventFired");
-await call("Runtime.evaluate", { expression: "document.querySelector('button').click()" });
-await loaded;
-const body = await call("Runtime.evaluate", { expression: "document.body.innerText", returnByValue: true });
-console.log(JSON.stringify({ body: body.result.value }));
-socket.close();
-clearTimeout(timeout);
-'''
-                result = subprocess.run([node, "--input-type=module", "-e", script,
-                                         page["webSocketDebuggerUrl"], form.url, EMAIL_CODE],
-                                        capture_output=True, text=True, timeout=20)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                body = json.loads(result.stdout)["body"]
-                self.assertIn("Submitted", body)
-                for secret in (TOKEN, EMAIL_CODE, PASSWORD):
-                    self.assertNotIn(secret, body)
-                self.assertTrue(form.done)
-                self.assertTrue(self.api.signed_in)
-                self.assertEqual(self.runtime.token(), TOKEN)
-            finally:
-                browser.terminate()
-                try:
-                    browser.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    browser.kill()
-                    browser.wait(timeout=5)
+        with self.form("email") as form:
+            options = {"mode":"form", "root":str(self.root), "binary":chrome, "url":form.url, "code":EMAIL_CODE}
+            result = subprocess.run([node, str(Path(__file__).with_name("browser-smoke.mjs"))],
+                                    input=json.dumps(options), capture_output=True, text=True, timeout=25)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            body = json.loads(result.stdout)["body"]
+            self.assertIn("Submitted", body)
+            for secret in (TOKEN, EMAIL_CODE, PASSWORD):
+                self.assertNotIn(secret, body)
+            self.assertTrue(form.done)
+            self.assertTrue(self.api.signed_in)
+            self.assertEqual(self.runtime.token(), TOKEN)
 
     def test_registration_requires_terms_and_preserves_pending_state(self):
         self.api.register = True
@@ -473,7 +410,7 @@ clearTimeout(timeout);
         self.api.network["currentStep"] = {"stepID": "cookies", "type": "cookies", "url": "https://provider.example/login", "fields": [{"id": "session", "type": "cookie"}]}
         result = self.runtime.network_view(self.api.network)
         self.assertEqual(result["next"], "browser-start")
-        self.assertEqual(result["browserMode"], "local")
+        self.assertEqual(result["browserMode"], "auto")
         self.assertEqual(result["step"]["url"], "https://provider.example/login")
         self.assertEqual(self.runtime.state()["network"]["loginSessionID"], "network-1")
         self.assertFalse(any("/steps/" in path for _, path, _, _ in self.api.requests))
