@@ -1,13 +1,13 @@
 {
   "name": "beeper",
-  "version": "0.2.1",
-  "description": "Connect Grok Build to Beeper Desktop to search chats, read messages, and send replies through its built-in MCP server.",
+  "version": "0.3.0",
+  "description": "Set up Beeper Server with Grok Bot, sign in to Beeper, connect chat networks, and work with your messages from chat.",
   "author": {
     "name": "suatsulun",
     "url": "https://github.com/suatsulun"
   },
   "repository": "https://github.com/suatsulun/beeper-grok-plugin",
-  "homepage": "https://developers.beeper.com/desktop-api/mcp/",
+  "homepage": "https://github.com/suatsulun/beeper-grok-plugin",
   "license": "MIT",
-  "keywords": ["beeper", "beeper-mcp", "beeper-desktop"]
+  "keywords": ["beeper", "beeper-server", "grok-bot", "messaging", "authentication"]
 }
