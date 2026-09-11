@@ -66,7 +66,7 @@ class BrowserLoginTests(unittest.TestCase):
 
     def test_native_requires_endpoint_and_never_installs_companion(self):
         with patch("browser_login.cloud") as cloud:
-            for mode in ("native", "local"):
+            for mode in ("native",):
                 with self.assertRaises(Failure) as caught: serve(self.runtime, mode)
                 self.assertEqual(caught.exception.code, "native_browser_unavailable")
             cloud.assert_not_called()
@@ -74,9 +74,13 @@ class BrowserLoginTests(unittest.TestCase):
 
     def test_default_and_explicit_browser_routing(self):
         with patch("browser_login.cloud", return_value=0) as cloud:
-            self.assertEqual(serve(self.runtime), 0)
+            with patch("browser_login.emit") as emit:
+                self.assertEqual(serve(self.runtime), 0)
+                self.assertEqual(emit.call_args.args[0]["data"]["state"], "local-browser-required")
+            cloud.assert_not_called()
+            self.assertEqual(self.runtime.state()["network"]["browser"], "local")
+            self.assertEqual(serve(self.runtime, "cloud"), 0)
             self.assertIsNone(cloud.call_args.args[-1])
-            self.assertEqual(self.runtime.state()["network"]["browser"], "cloud")
             self.assertEqual(serve(self.runtime, "native", "http://127.0.0.1:9222"), 0)
             self.assertEqual(cloud.call_args.args[-1], "http://127.0.0.1:9222")
             for endpoint in ("http://192.168.1.10:9222", "https://example.com", "http://user:secret@127.0.0.1:9222", "http://127.0.0.1:9222/path", "http://127.0.0.1:9222/?token=secret"):

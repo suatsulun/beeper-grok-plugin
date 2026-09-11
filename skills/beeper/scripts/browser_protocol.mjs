@@ -62,6 +62,14 @@ export function complete(plan, fields, lastURL, providers) {
   if (plan.expectedFinalURLRegex && !safeRegex(plan.expectedFinalURLRegex).test(lastURL)) return false;
   return plan.fields.every(f => !f.required || (typeof fields[f.id] === 'string' && fields[f.id].length > 0 && fields[f.id].length <= 16384 && (!f.pattern || safeRegex(f.pattern).test(fields[f.id]))));
 }
+export function validatePayload(plan, payload, providers) {
+  validatePlan(plan, providers);
+  const {fields, lastURL} = payload;
+  const ids = new Set(plan.fields.map(field => field.id));
+  check(complete(plan, fields, lastURL, providers) &&
+    Object.entries(fields).every(([id, value]) => ids.has(id) && typeof value === 'string' && value.length <= 16384));
+  return payload;
+}
 export function selectFields(plan, cookies, storage = {}, headers = {}) {
   const fields = Object.create(null);
   for (const f of plan.fields) for (const s of f.sources) {

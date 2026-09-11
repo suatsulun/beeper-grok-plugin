@@ -105,6 +105,9 @@ class Runtime:
             else:
                 data[key] = value
         write_json(self.state_file, data)
+        if "network" in values and values["network"] is None:
+            (self.root / "browser-transfer.json").unlink(missing_ok=True)
+            (self.root / "local-browser-package.json").unlink(missing_ok=True)
 
     def target(self):
         target = read_json(self.target_file)
@@ -349,7 +352,7 @@ class Runtime:
         if step.get("type") == "cookies":
             result["next"] = "browser-start"
             result["browserMode"] = self.state().get("network", {}).get("browser", "auto")
-            result["instruction"] = "Read browser-login.md. Prefer Grok's built-in cookie approval/import when available with its receiving browser endpoint; otherwise offer provider-website login on Grok's computer. No extension, relay, or Node upgrade is needed. Never request cookies in chat."
+            result["instruction"] = "Read browser-login.md. Run browser-start for a local browser request and execute its bundled helper on the user's PC through Grok Desktop. Reuse an approved Chrome session or open the provider website on that PC; every transfer requires fresh approval. Do not silently use Grok's cloud browser."
         if step.get("type") == "user_input" and self.credential_fields(step.get("fields", [])):
             result["next"] = "choose-supported-flow"
             result["instruction"] = "This flow requires direct network credentials. The plugin uses provider websites for password sign-in. Inspect flows for a supported website or QR option; if none exists, explain that this Server bridge cannot use browser login."
@@ -467,7 +470,10 @@ def main():
     for name in ("status", "start", "stop", "accounts", "networks", "login-cancel", "verify-start", "verify-show", "verify-accept", "verify-sas", "verify-cancel", "network-show", "network-poll", "network-cancel"):
         commands.add_parser(name)
     commands.add_parser("browser-check", help="Check the existing browser runtime without downloads or sign-in")
-    commands.add_parser("browser-plan", help="Show the selected provider and origins for native Grok approval")
+    commands.add_parser("browser-plan", help="Show the selected provider, origins, and local browser requirements")
+    commands.add_parser("browser-cancel", help="Invalidate a local transfer while preserving the network login")
+    p = commands.add_parser("browser-finish", help="Deliver a one-use encrypted local browser transfer")
+    p.add_argument("--file", required=True, help="Encrypted envelope returned by the local helper")
     p = commands.add_parser("login")
     p.add_argument("--email", required=True)
     p = commands.add_parser("verify-confirm")
@@ -500,6 +506,15 @@ def main():
             from browser_login import describe
             with runtime.lock():
                 emit({"success": True, "data": describe(runtime)})
+            return
+        if args.command == "browser-finish":
+            from local_transfer import finish_transfer
+            emit({"success": True, "data": redact(finish_transfer(runtime, args.file))})
+            return
+        if args.command == "browser-cancel":
+            from local_transfer import cancel_transfer
+            with runtime.lock():
+                emit({"success": True, "data": cancel_transfer(runtime)})
             return
         if args.command == "input":
             from private_input import serve

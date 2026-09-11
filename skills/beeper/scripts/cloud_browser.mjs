@@ -61,7 +61,17 @@ export async function attachBrowser(endpoint) {
   if (wsURL.protocol !== 'ws:' || wsURL.hostname !== '127.0.0.1' || wsURL.port !== url.port ||
       wsURL.username || wsURL.password || wsURL.search || wsURL.hash ||
       !/^\/devtools\/browser\/[\w-]+$/.test(wsURL.pathname)) throw Error('Invalid browser transport.');
+  return connectBrowserWebSocket(wsURL.href);
+}
+
+export async function connectBrowserWebSocket(endpoint, {connectTimeout = 5000, signal} = {}) {
+  const wsURL = new URL(endpoint);
+  if (wsURL.protocol !== 'ws:' || wsURL.hostname !== '127.0.0.1' || !wsURL.port ||
+      wsURL.username || wsURL.password || wsURL.search || wsURL.hash ||
+      !/^\/devtools\/browser\/[\w-]+$/.test(wsURL.pathname)) throw Error('Invalid browser transport.');
   const socket = new WebSocket(wsURL);
+  const abort = () => socket.close();
+  signal?.addEventListener('abort', abort, {once:true});
   let sequence = 0;
   const pending = new Map(), listeners = new Set();
   const closed = () => {
@@ -72,11 +82,13 @@ export async function attachBrowser(endpoint) {
   socket.addEventListener('close', closed);
   try {
     await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(Error('Browser connection timed out.')), 5000);
+      if (signal?.aborted) return reject(Error('Browser connection cancelled.'));
+      const timer = setTimeout(() => reject(Error('Browser connection timed out.')), connectTimeout);
       socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, {once:true});
       socket.addEventListener('error', () => { clearTimeout(timer); reject(Error('Browser connection failed.')); }, {once:true});
+      socket.addEventListener('close', () => { clearTimeout(timer); reject(Error('Browser connection closed.')); }, {once:true});
     });
-  } catch (error) { socket.close(); throw error; }
+  } catch (error) { signal?.removeEventListener('abort', abort); socket.close(); throw error; }
   socket.addEventListener('message', event => {
     let message;
     try { message = JSON.parse(event.data); } catch { return; }
@@ -93,10 +105,10 @@ export async function attachBrowser(endpoint) {
     socket.send(JSON.stringify({id, method, params, ...(sessionId ? {sessionId} : {})}));
   });
   // Disconnect only. Never close Grok's browser or its other tabs.
-  return {send, listeners, close:async () => { closed(); socket.close(); }};
+  return {send, listeners, close:async () => { signal?.removeEventListener('abort', abort); closed(); socket.close(); }};
 }
 
-export async function collectSession(browser, plan, {timeout = 600, providers:registry = providers, navigateURL, signal} = {}) {
+export async function collectSession(browser, plan, {timeout = 600, providers:registry = providers, navigateURL, signal, onReady} = {}) {
   const provider = validatePlan(plan, registry);
   if (signal?.aborted) throw Error('Browser login cancelled.');
   const {targetId} = await browser.send('Target.createTarget', {url:'about:blank'});
@@ -130,6 +142,7 @@ export async function collectSession(browser, plan, {timeout = 600, providers:re
     try {
       await send('Page.navigate', {url:navigateURL || plan.url});
       const deadline = Date.now() + timeout * 1000;
+      let approved = !onReady;
       while (Date.now() < deadline) {
         if (signal?.aborted) throw Error('Browser login cancelled.');
         const page = await send('Runtime.evaluate', {expression:'location.href', returnByValue:true});
@@ -142,7 +155,30 @@ export async function collectSession(browser, plan, {timeout = 600, providers:re
           const names = [...new Set(plan.fields.flatMap(f => f.sources.filter(s => s.type === 'local_storage').map(s => s.name)))];
           const {result} = await send('Runtime.evaluate', {expression:`Object.fromEntries(${JSON.stringify(names)}.map(key => [key, localStorage.getItem(key)]))`, returnByValue:true});
           const fields = selectFields(plan, cookies, result.value || {}, headers);
-          if (complete(plan, fields, lastURL, registry)) return {fields, lastURL};
+          if (complete(plan, fields, lastURL, registry)) {
+            if (!approved) {
+              await onReady();
+              if (signal?.aborted) throw Error('Browser login cancelled.');
+              approved = true;
+              // The user may switch accounts before approving. Re-read the
+              // current session and observe fresh headers after that approval.
+              for (const key of Object.keys(headers)) delete headers[key];
+              let cleanup;
+              const loaded = new Promise((resolve, reject) => {
+                const listener = message => {
+                  if (message.sessionId === sessionId && message.method === 'Page.loadEventFired') resolve();
+                };
+                const stop = () => reject(Error('Browser login cancelled.'));
+                const timer = setTimeout(() => reject(Error('Provider reload timed out.')), 30000);
+                browser.listeners.add(listener); signal?.addEventListener('abort', stop, {once:true});
+                cleanup = () => { clearTimeout(timer); browser.listeners.delete(listener); signal?.removeEventListener('abort', stop); };
+              });
+              try { await Promise.all([loaded, send('Page.reload')]); }
+              finally { cleanup(); }
+              continue;
+            }
+            return {fields, lastURL};
+          }
         }
         await new Promise(resolve => setTimeout(resolve, 1000));
       }

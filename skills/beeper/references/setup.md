@@ -98,9 +98,9 @@ python3 HELPER browser-check
 python3 HELPER browser-plan
 ```
 
-Prefer Grok's native, approved cookie import when Grok exposes it and the receiving cloud-browser endpoint. Otherwise offer `browser-start --browser cloud` to open the provider's actual website on Grok's computer. There is no extension or relay to install. Existing Node 20.19.2 works; do not request a Node upgrade. The helper does not depend on `Bun.WebView`.
+Run `browser-start --browser local` and follow the browser guide to execute its bundled helper on the user's PC through Grok Desktop. Reuse an approved Chrome session or open a separate local provider window, then require a fresh local approval before every encrypted transfer. If the local tools are unavailable or denied, report that limit; use a cloud browser only if the user explicitly chooses it. There is no extension or relay to install. Existing Node 20.19.2 works; do not request a Node upgrade. The helper does not depend on `Bun.WebView`.
 
-Both paths resume the saved login and submit only the required fields to Server. Do not cancel and recreate a login merely to switch browser modes. If a browser attempt fails or times out, inspect `network-show` and `accounts` before another attempt. Unsupported fields or providers produce explicit errors. Connected accounts and a scoped read establish successful network setup.
+Both local browser choices resume the saved login and submit only the required fields to Server. Do not cancel and recreate a login merely to switch browser modes. If a browser attempt fails or times out, inspect `network-show` and `accounts` before another attempt. Unsupported fields or providers produce explicit errors. Connected accounts and a scoped read establish successful network setup.
 
 ### Clipboard and password managers
 
@@ -108,7 +108,7 @@ The Bot's Chrome runs on a different computer from the user's desktop browser. O
 
 If the user's takeover UI provides a clipboard/paste control, try it first with harmless text. If Grok provides a supported masked secret request for this connection, use that facility; do not invent a tool, claim arbitrary fields are supported, or route the value through ordinary chat. [Grok's credential handoff documentation](https://docs.x.ai/grok-bot/approvals-security-and-privacy) distinguishes secure requests from normal messages.
 
-For compatible network logins, prefer [Grok's native cookie import](browser-login.md) if available, so the user can reuse their own browser session. It does not synchronize the clipboard. If Grok does not expose native import, the plugin cannot access the user's browser from the cloud without another component; explain that limitation and offer provider-site sign-in in Grok. Beeper email/recovery and native phone/code steps still use private input on Grok's computer. If those inputs cannot be entered, explain the limitation and pause that step. Do not sync a password vault, read browser cookie databases, or upload cookie files into chat.
+For compatible network logins, use the [bundled local browser helper](browser-login.md) through Grok Desktop's approved local tools. It reuses an approved Chrome session or opens the provider website on the PC, so there is no clipboard transfer to the cloud for that website login. A separate local Chrome profile does not inherit the user's normal browser extensions or autofill. Beeper email/recovery and native phone/code steps still use private input on Grok's computer. If those inputs cannot be entered, explain the limitation and pause that step. Do not sync a password vault, read browser cookie databases, or upload cookie files into chat.
 
 ## Known upstream limits
 

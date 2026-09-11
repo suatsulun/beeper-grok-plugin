@@ -58,12 +58,16 @@ def prepare(runtime):
 def submit(runtime, snapshot, payload, plan):
     node_call({"action": "validate", "plan": plan, "payload": payload})
     with runtime.lock():
-        session = runtime.network_session()
-        if snapshot != (runtime.network_path(), fingerprint(session)) or session.get("status") in TERMINAL:
-            raise Failure("The network login changed. This browser handoff cannot be reused.", "stale_input")
-        result = runtime.api("POST", snapshot[0] + "/steps/" + segment(session["currentStep"]["stepID"]),
-                             {"type": "cookies", "fields": payload["fields"], "lastURL": payload["lastURL"], "source": "webview"})
-        return runtime.network_view(result)
+        return submit_locked(runtime, snapshot, payload)
+
+
+def submit_locked(runtime, snapshot, payload):
+    session = runtime.network_session()
+    if snapshot != (runtime.network_path(), fingerprint(session)) or session.get("status") in TERMINAL:
+        raise Failure("The network login changed. This browser handoff cannot be reused.", "stale_input")
+    result = runtime.api("POST", snapshot[0] + "/steps/" + segment(session["currentStep"]["stepID"]),
+                         {"type": "cookies", "fields": payload["fields"], "lastURL": payload["lastURL"], "source": "webview"})
+    return runtime.network_view(result)
 
 
 def stop_process(process):
@@ -83,8 +87,9 @@ def describe(runtime):
     origins.update("https://" + source["domain"] for field in plan["fields"]
                    for source in field["sources"] if source["type"] == "cookie")
     return {"provider": plan["provider"], "loginURL": plan["url"], "origins": sorted(origins),
-            "nativeImport": "Requires Grok's supported cookie approval/import and its cloud browser endpoint; availability is controlled by Grok.",
-            "fallback": "browser-start --browser cloud"}
+            "next": "browser-start --browser local",
+            "localRequirements": "Grok Desktop local execution and existing Chrome; Chrome 144+ approval for session reuse. Every transfer needs fresh approval.",
+            "cloudAlternative": "Only if the user explicitly chooses browser-start --browser cloud"}
 
 
 def serve(runtime, browser=None, cdp_url=None):
@@ -98,13 +103,17 @@ def serve(runtime, browser=None, cdp_url=None):
             plan, snapshot = prepare(runtime)
             pending = runtime.state()["network"]
             browser = browser or pending.get("browser", "auto")
-            # v0.4 local sessions remain resumable, but never reinstall an extension.
-            if browser == "local":
-                browser = "native"
             if browser == "auto":
-                browser = "native" if cdp_url else "cloud"
+                browser = "native" if cdp_url else "local"
+            if browser == "local":
+                if cdp_url:
+                    raise Failure("Local browser discovery runs on the PC; do not pass a cloud endpoint.", "invalid_browser")
+                from local_transfer import prepare_transfer
+                runtime.update(network={**pending, "browser": browser})
+                emit({"success": True, "data": prepare_transfer(runtime, plan, snapshot)})
+                return 0
             if browser == "native" and not cdp_url:
-                raise Failure("Own-browser login needs Grok's built-in cookie approval/import and the supported endpoint of its receiving cloud browser. If Grok does not expose both, offer browser-start --browser cloud. No extension or relay is installed.", "native_browser_unavailable")
+                raise Failure("Native import needs Grok's built-in cookie approval/import and its receiving cloud browser endpoint. Use browser-start --browser local for the bundled PC helper when native import is unavailable. No extension or relay is installed.", "native_browser_unavailable")
             if browser == "cloud" and cdp_url:
                 raise Failure("Use --browser native with a Grok-provided browser endpoint.", "invalid_browser")
             if cdp_url:

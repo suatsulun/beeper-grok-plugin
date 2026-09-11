@@ -16,7 +16,7 @@ QR_SHA256 = "16e64e0716c14960108e85d853062c9e8bba5ca8252c0b4d0231b9df4060ff4f"
 
 
 def download(url, checksum):
-    request = urllib.request.Request(url, headers={"User-Agent": "beeper-grok-plugin/0.5.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "beeper-grok-plugin/0.6.0"})
     with urllib.request.urlopen(request, timeout=120) as response:
         content = response.read(200 * 1024 * 1024 + 1)
     if len(content) > 200 * 1024 * 1024:
