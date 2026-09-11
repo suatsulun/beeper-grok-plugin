@@ -42,4 +42,4 @@ The helper chooses `/workspace/.beeper-grok` on Grok Bot, or `~/.local/share/bee
 
 ## Completion
 
-For setup, verify the selected account's connection state and a scoped chat/message read. Send only if explicitly requested, to an exact confirmed recipient. Before describing the plugin as tested in Grok Bot, complete the [acceptance checks](../../docs/testing.md) in an actual Bot computer; local CLI validation alone is insufficient.
+For setup, verify the selected account's connection state and a scoped chat/message read. Report the connected account and any remaining sync or network limitation. Send only if explicitly requested, to an exact confirmed recipient.

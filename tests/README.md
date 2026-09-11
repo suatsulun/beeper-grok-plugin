@@ -30,3 +30,5 @@ Install the plugin through the Bot account's supported plugin/skill distribution
 ## What is not yet established by local tests
 
 The fake API checks protocol handling and local invariants, not the live Server's correctness. CLI packaging validation does not prove Bot marketplace import, private browser takeover, long-running process durability, WebView support, every network's sign-in, or delivery. Record a real result for each applicable acceptance step before labeling the plugin ready for submission.
+
+For marketplace submission, Beeper's maintainers should review and approve the Server bootstrap and publish the source under the appropriate official organization. The [marketplace contribution guide](https://github.com/xai-org/plugin-marketplace/blob/main/CONTRIBUTING.md) flags downloading and executing binaries for review. Checksums and an explicit user-requested setup flow make this implementation inspectable; they do not establish marketplace approval.

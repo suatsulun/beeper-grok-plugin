@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/beeper-icon.png" alt="Beeper" width="96" height="96">
+  <img src="assets/logo.png" alt="Beeper" width="96" height="96">
 </p>
 
 # Beeper for Grok Bot
@@ -29,22 +29,34 @@ Restart Grok, open `/skills`, or invoke `/beeper`. The skill is also discoverabl
 
 For Grok Bot, install and enable the packaged skill through the plugin distribution available to your account. Private installed skills can be enabled under **Settings → Plugins → Yours**. The public marketplace submission remains a separate step; installing into your local CLI does not install into Grok Bot's cloud computer. See [Grok Bot skills](https://docs.x.ai/grok-bot/skills-routines-and-automations).
 
-## Runtime and data
+## Requirements
 
 - Python 3.10+ and Linux x86_64/aarch64 for automatic installation.
 - Network access to Beeper, GitHub releases, and the Python package CDN.
 - Browser access and user takeover for sensitive authentication steps. Some networks additionally require the CLI's Chrome WebView backend.
 - Beeper CLI 0.6.2 and qrcode 8.2 are downloaded from their official releases with pinned SHA-256 checksums. Server is installed through Beeper's official CLI.
 
+## Authentication and data
+
 Data lives in `/workspace/.beeper-grok` on Grok Bot, or `~/.local/share/beeper-grok-plugin` elsewhere. `BEEPER_PLUGIN_HOME` can select another persistent location. Credentials, Server data, and pending login state stay outside the plugin files, with private filesystem permissions. All Bots on the same Grok account share the cloud computer. See [Grok Bot's computer model](https://docs.x.ai/grok-bot/computer-and-apps).
+
+The plugin uses your Beeper sign-in and the credentials required by each selected network. Private input pages bind only to `127.0.0.1`, expire after ten minutes, and keep submitted values out of chat and command arguments. Messages you ask Grok to retrieve enter the conversation. Sending delivers the requested content to the selected recipient.
 
 The plugin uses the [official Beeper CLI and API](https://github.com/beeper/cli). It includes no Desktop installer or Desktop MCP connection. Grok executes the skill's Server setup and messaging commands directly.
 
+The helper downloads tools from `github.com/beeper/cli/releases` and `files.pythonhosted.org`, then calls only its Server API at `http://127.0.0.1:<port>`. Beeper CLI downloads Server through `api.beeper-staging.com` and its release-CDN redirects. Server then connects to Beeper's production authentication/sync services and your selected networks. The plugin adds no telemetry; Beeper's own software is governed by its [privacy policy](https://www.beeper.com/privacy).
+
 ## Validation status
 
-This version implements the Server onboarding workflow and includes automated tests for authentication state, verification, private input, and network login transitions. **A full run in an actual Grok Bot computer is still required before marketplace submission.** See the [test procedure](docs/testing.md).
+This version implements the Server onboarding workflow. Its 24 automated tests cover authentication state, verification, private input, network login transitions, and installation recovery. **A full run in an actual Grok Bot computer is still required before marketplace submission.** See the [test procedure](tests/README.md).
 
 Beeper's current Server installer downloads a nightly artifact. Upstream issues affecting device verification and headless chat availability are documented in the [setup guide](skills/beeper/references/setup.md#known-upstream-limits), along with the implemented verification workaround. Network support depends on the bridges available on the Server and the login facilities in the Bot computer; the plugin does not claim every network is tested.
+
+## Support
+
+- [Beeper CLI](https://github.com/beeper/cli)
+- [Setup and troubleshooting](skills/beeper/references/setup.md)
+- [Report a plugin issue](https://github.com/suatsulun/beeper-grok-plugin/issues)
 
 ## License
 
