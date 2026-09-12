@@ -4,7 +4,23 @@ Default to the user's PC for supported network website logins. Reuse their appro
 
 Use the existing `cookies` step returned by Server. Keep its saved login transaction. Do not invent flow IDs or convert password/mobile-API flows into cookie flows.
 
+## Instagram cookie requirements
+
+The upstream bridge defines **`sessionid`, `csrftoken`, and `ds_user_id` as required**, and **`rur`, `shbid`, `shbts`, `mid`, and `ig_did` as optional**. Some valid signed-in sessions omit optional cookies. Do not describe missing `shbid`/`shbts` as failed sign-in or ask the user to browse more, switch profiles, or log in again solely to obtain them. Never synthesize missing values, copy cookies from another account, or populate absent fields with placeholders.
+
+Run `browser-plan` and use its `requiredFields` / `optionalFields` (also returned by `browser-start`). `network-show` preserves any raw `required` and `optional` flags. **Absence of an `optional` flag alone does not mean required.** The upstream cookie-field model uses `required`; this differs from the native user-input model's `optional` field. The public Beeper SDK's simplified cookie-field type can omit requirement metadata entirely.
+
+The helper honors a boolean `required` first, then a boolean `optional`. If both are absent, v0.6.1 recognizes the five documented optional Instagram cookie names, including a cookie source with a different field ID. This fallback applies only to named cookies on the Instagram provider; it does not make similarly named headers, local storage, unknown fields, or another provider optional. Other unspecified fields retain the required default. Only requested fields are collected, and absent optional fields are omitted from submission.
+
+If the live bridge explicitly returns `required: true` (or `optional: false`) for one of these optional cookies, report the conflicting requirement as a bridge compatibility issue. Preserve that explicit requirement rather than silently weakening it. A home feed proves website sign-in, not that Server accepted the session or that chats are ready. Confirm `accounts` after an approved submission.
+
+When updating from v0.6.0, stop only the old waiting helper, keep the provider session, and use `browser-cancel` to invalidate its transfer while preserving the pending Beeper login. Run the updated helper's `browser-plan` and `browser-start --browser local`, copy the new public package, and request fresh approval. Preparing again also replaces a saved request whose effective field requirements changed; never edit an existing authenticated request or reuse its ciphertext. Do not cancel/recreate a valid network login just to apply this fix.
+
+Sources checked on 12 September 2026: [upstream required/optional cookie lists and missing-cookie check](https://github.com/mautrix/meta/blob/857f87f7f57d1a036550d77116def663a061c541/pkg/messagix/cookies/cookies.go), [bridge cookie-field model](https://github.com/mautrix/go/blob/main/bridgev2/login.go), [Beeper SDK cookie-field and input-field models](https://github.com/beeper/desktop-api-js/blob/next/src/resources/bridges/bridges.ts).
+
 ## Check both computers
+
+See the [complete login audit](login-audit.md) for all browser providers and native methods. X also has documented optional challenge extras; Facebook/LinkedIn's required values remain required, and the inspected Slack token flow needs unsupported extraction. A provider in the registry is not proof that every live login method is compatible.
 
 On Grok's cloud computer:
 
@@ -68,7 +84,7 @@ python3 HELPER browser-finish --file ENCRYPTED_FILE.json
 
 The cloud helper authenticates/decrypts it, checks the same pending login step, consumes the request before submission, and sends the required fields directly to Beeper Server. Encryption uses X25519, HKDF-SHA-256, and AES-256-GCM with the full request bound as authenticated context. No Cloudflare tunnel or public receiver is needed. Grok handles the ciphertext, not session plaintext in its transcript.
 
-Check `network-show` and `accounts` afterward, then a scoped chat read. An encrypted transfer being ready is not proof of Beeper accepting it or of messaging readiness. If delivery fails or times out, inspect the current state before requesting a new approval; never replay or automatically repeat submission.
+Check `network-show` and `accounts` afterward, then a scoped chat read. An encrypted transfer being ready is not proof of Beeper accepting it or of messaging readiness. If delivery fails or times out, inspect the current state before requesting a new approval; never replay or automatically repeat submission. Follow the [recovery sequence](login-audit.md#keep-connection-recovery-simple) to distinguish transfer expiry from an expired bridge transaction and avoid unnecessary sign-ins. Await the existing local job's progress events; `phase: ready` means ask for the user's transfer click, and `encrypted-transfer-ready` means deliver that ciphertext once without an additional confirmation round.
 
 `browser-cancel` invalidates the transfer while preserving the pending network login. `network-cancel` cancels that login and invalidates its transfer. Cancellation on the PC closes collection without a payload. After cancellation or expiry, prepare a new request and require approval again. Remove temporary public packages and encrypted output after completion; retain the user's owned browser profile unless they request its removal.
 

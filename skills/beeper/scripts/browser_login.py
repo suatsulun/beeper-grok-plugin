@@ -87,6 +87,9 @@ def describe(runtime):
     origins.update("https://" + source["domain"] for field in plan["fields"]
                    for source in field["sources"] if source["type"] == "cookie")
     return {"provider": plan["provider"], "loginURL": plan["url"], "origins": sorted(origins),
+            "requiredFields": [field["id"] for field in plan["fields"] if field["required"]],
+            "optionalFields": [field["id"] for field in plan["fields"] if not field["required"]],
+            "fieldInstruction": "Only requiredFields block readiness. Collect optionalFields when present; never invent values or ask the user to browse/re-login just to obtain them. Explicit bridge requirements take precedence over provider defaults.",
             "next": "browser-start --browser local",
             "localRequirements": "Grok Desktop local execution and existing Chrome; Chrome 144+ approval for session reuse. Every transfer needs fresh approval.",
             "cloudAlternative": "Only if the user explicitly chooses browser-start --browser cloud"}
@@ -133,7 +136,7 @@ def cloud(runtime, plan, snapshot, cdp_url=None):
     node = shutil.which("node")
     if not node:
         raise Failure("The Server computer's node executable is unavailable. Grok's existing Node 20 is supported; no Node upgrade is required.", "browser_runtime_unavailable")
-    emit({"success": True, "data": {"state": "using-grok-browser" if cdp_url else "opening-provider-website", "provider": plan["provider"], "instruction": "The provider website will open on this computer. Use Grok takeover if sign-in is needed. Only required session fields go directly to Beeper Server."}})
+    emit({"success": True, "data": {"state": "using-grok-browser" if cdp_url else "opening-provider-website", "provider": plan["provider"], "instruction": "The provider website will open on this computer. Use Grok takeover if sign-in is needed. Requested required fields and any optional fields present go directly to Beeper Server; missing optional fields do not block sign-in."}})
     process = subprocess.Popen([node, "--experimental-websocket", str(SCRIPTS / "cloud_browser.mjs")], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     data = json.dumps({"plan": plan, "root": str(runtime.root), "timeout": 600, "cdpURL": cdp_url})
     deadline = time.monotonic() + 630

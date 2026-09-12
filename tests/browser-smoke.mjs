@@ -83,19 +83,25 @@ try {
       {id:'sessionid', type:'cookie'},
       {id:'storage', type:'local_storage', name:'test_storage'},
       {id:'header', sources:[{type:'request_header',name:'Authorization',requestURLRegex:'/api/'}]},
+      {id:'absent_cookie', type:'cookie', required:false},
+      {id:'absent_storage', type:'local_storage', required:false},
+      {id:'absent_header', type:'header', required:false},
     ]}, providers);
     const result = await collectSession(browser, plan, {timeout:12});
     assert.deepEqual({...result.fields}, {sessionid:sessionValue, storage:'synthetic-storage', header:'synthetic-header'});
     console.log('CLOUD_BROWSER_SMOKE_OK');
     if (options.mode === 'native') {
       assert.ok((await owner.send('Target.getTargets')).targetInfos.some(t => t.targetId === untouched), 'Other tabs survive collection');
-      const targetsBefore = (await owner.send('Target.getTargets')).targetInfos.map(t => t.targetId).sort();
+      // Browser-owned workers/background targets can appear asynchronously.
+      // The collector owns a page tab; compare page tabs to test its cleanup.
+      const pageTargets = async () => (await owner.send('Target.getTargets')).targetInfos.filter(t => t.type === 'page').map(t => t.targetId).sort();
+      const targetsBefore = await pageTargets();
       const abort = new AbortController();
       const missing = normalize({type:'cookies', url:'https://www.instagram.com/', fields:[{id:'not_present', type:'cookie'}]}, providers);
       const timer = setTimeout(() => abort.abort(), 1200);
       try { await assert.rejects(collectSession(browser, missing, {timeout:12, signal:abort.signal})); }
       finally { clearTimeout(timer); }
-      assert.deepEqual((await owner.send('Target.getTargets')).targetInfos.map(t => t.targetId).sort(), targetsBefore, 'Cancellation removes only the new tab');
+      assert.deepEqual(await pageTargets(), targetsBefore, 'Cancellation removes only the new tab');
       await browser.close();
       assert.ok((await owner.send('Target.getTargets')).targetInfos.some(t => t.targetId === untouched), 'Imported browser stays open after disconnect');
       console.log('NATIVE_BROWSER_SMOKE_OK');

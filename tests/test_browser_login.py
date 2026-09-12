@@ -114,6 +114,128 @@ for (const url of ['ws://example.com:9222/devtools/browser/id', 'ws://127.0.0.1:
         self.assertEqual(result["provider"], "instagram")
         self.assertNotIn(SECRET, json.dumps(result))
 
+    def test_instagram_optional_cookies_do_not_block_but_core_cookies_still_do(self):
+        required = ["sessionid", "csrftoken", "ds_user_id"]
+        optional = ["rur", "shbid", "shbts", "mid", "ig_did"]
+        self.api.network["currentStep"]["fields"] = [{"id": name, "type": "cookie"} for name in required + optional]
+        plan, snapshot = prepare(self.runtime)
+        self.assertEqual([f["id"] for f in plan["fields"] if f["required"]], required)
+        self.assertEqual([f["id"] for f in plan["fields"] if not f["required"]], optional)
+        fields = {"sessionid": SECRET, "csrftoken": "synthetic-csrf", "ds_user_id": "123"}
+        for name in required:
+            with self.subTest(missing=name), self.assertRaises(Failure):
+                submit(self.runtime, snapshot, {"fields": {k: v for k, v in fields.items() if k != name}, "lastURL": plan["url"]}, plan)
+        self.assertEqual(self.submissions(), [])
+        node_call({"action": "validate", "plan": plan, "payload": {"fields": {**fields, "shbid": "synthetic-optional"}, "lastURL": plan["url"]}})
+        submit(self.runtime, snapshot, {"fields": fields, "lastURL": plan["url"]}, plan)
+        self.assertEqual(self.submissions()[0]["fields"], fields)
+        self.assertNotIn("shbid", self.submissions()[0]["fields"])
+        self.assertNotIn("shbts", self.submissions()[0]["fields"])
+
+    def test_explicit_cookie_flags_override_provider_defaults(self):
+        for flags, expected in [({}, False), ({"required": True}, True), ({"required": False}, False),
+                                ({"optional": False}, True), ({"optional": True}, False),
+                                ({"required": True, "optional": True}, True),
+                                ({"required": False, "optional": False}, False)]:
+            with self.subTest(flags=flags):
+                step = {**self.api.network["currentStep"], "fields": [{"id": "sessionid"}, {"id": "shbid", **flags}]}
+                plan = node_call({"action": "plan", "step": step})
+                self.assertIs(plan["fields"][1]["required"], expected)
+                payload = {"fields": {"sessionid": SECRET}, "lastURL": plan["url"]}
+                if expected:
+                    with self.assertRaises(Failure): node_call({"action": "validate", "plan": plan, "payload": payload})
+                else:
+                    node_call({"action": "validate", "plan": plan, "payload": payload})
+        for flags in ({"required": "false"}, {"optional": "true"}):
+            with self.assertRaises(Failure):
+                node_call({"action": "plan", "step": {**self.api.network["currentStep"], "fields": [{"id": "sessionid", **flags}]}})
+
+    def test_instagram_defaults_are_scoped_to_known_cookie_sources(self):
+        for url, field, required in [
+            ("https://www.facebook.com/", {"id": "shbid"}, True),
+            ("https://www.instagram.com/", {"id": "unknown_cookie"}, True),
+            ("https://www.instagram.com/", {"id": "shbid", "type": "local_storage"}, True),
+            ("https://www.instagram.com/", {"id": "shbid", "type": "header"}, True),
+            ("https://www.instagram.com/", {"id": "shbid", "name": "other_cookie"}, True),
+            ("https://www.instagram.com/", {"id": "routing", "sources": [{"type": "cookie", "name": "shbid"}]}, False),
+        ]:
+            with self.subTest(url=url, field=field):
+                plan = node_call({"action": "plan", "step": {"type": "cookies", "url": url, "fields": [{"id": "sessionid"}, field]}})
+                self.assertIs(plan["fields"][1]["required"], required)
+
+    def test_network_summary_preserves_flags_and_plan_reports_effective_requirements(self):
+        self.api.network["currentStep"]["fields"] = [
+            {"id": "sessionid", "required": True}, {"id": "shbid", "required": False}, {"id": "shbts"}]
+        view = self.runtime.network_view(self.api.network)
+        self.assertIs(view["step"]["fields"][1]["required"], False)
+        self.assertNotIn("required", view["step"]["fields"][2])
+        plan = describe(self.runtime)
+        self.assertEqual(plan["requiredFields"], ["sessionid"])
+        self.assertEqual(plan["optionalFields"], ["shbid", "shbts"])
+        self.assertIn("browser-plan", view["instruction"])
+
+    def test_all_providers_accept_missing_optional_sources_and_validate_present_values(self):
+        for domain in ("instagram.com", "facebook.com", "messenger.com", "linkedin.com", "x.com", "twitter.com", "discord.com", "discordapp.com", "slack.com"):
+            for source_type in ("cookie", "local_storage", "request_header"):
+                with self.subTest(domain=domain, source=source_type):
+                    step = {"type": "cookies", "url": "https://" + domain + "/", "fields": [
+                        {"id": "session", "required": True, "sources": [{"type": source_type, "name": "session"}]},
+                        {"id": "extra", "required": False, "pattern": "^valid-", "sources": [{"type": source_type, "name": "extra"}]},
+                        {"id": "unsupported_extra", "optional": True, "sources": [{"type": "special", "name": "unimplemented"}]},
+                    ]}
+                    plan = node_call({"action": "plan", "step": step})
+                    self.assertEqual([f["id"] for f in plan["fields"]], ["session", "extra"])
+                    for fields in ({"session": SECRET}, {"session": SECRET, "extra": "valid-optional"}):
+                        node_call({"action": "validate", "plan": plan, "payload": {"fields": fields, "lastURL": plan["url"]}})
+                    for fields in ({"extra": "valid-optional"}, {"session": SECRET, "extra": "invalid"}, {"session": SECRET, "extra": ""}):
+                        with self.assertRaises(Failure):
+                            node_call({"action": "validate", "plan": plan, "payload": {"fields": fields, "lastURL": plan["url"]}})
+
+    def test_twitter_optional_browser_inputs_do_not_waive_authentication(self):
+        step = {"type": "cookies", "url": "https://x.com/", "fields": [
+            {"id": "auth_token"}, {"id": "ct0"}, {"id": "guest_id"},
+            {"id": "browser_user_agent", "type": "header", "name": "User-Agent"},
+            {"id": "browser_hint", "type": "header", "name": "Sec-CH-UA"},
+            {"id": "castle_token", "sources": [{"type": "local_storage", "name": "fi.mau.twitter.castle_token"}]},
+            {"id": "castle_token_2", "sources": [{"type": "local_storage", "name": "fi.mau.twitter.castle_token_2"}]},
+            {"id": "guest_from_storage", "sources": [{"type": "local_storage", "name": "fi.mau.twitter.cookie.guest_id"}]},
+        ]}
+        plan = node_call({"action": "plan", "step": step})
+        required = [f["id"] for f in plan["fields"] if f["required"]]
+        self.assertEqual(required, ["auth_token", "ct0", "browser_user_agent", "castle_token"])
+        fields = {name: "synthetic-required" for name in required}
+        node_call({"action": "validate", "plan": plan, "payload": {"fields": fields, "lastURL": plan["url"]}})
+        for name in required:
+            with self.subTest(missing=name), self.assertRaises(Failure):
+                node_call({"action": "validate", "plan": plan, "payload": {"fields": {k: v for k, v in fields.items() if k != name}, "lastURL": plan["url"]}})
+        step["fields"][2]["required"] = True
+        strict = node_call({"action": "plan", "step": step})
+        self.assertTrue(strict["fields"][2]["required"])
+        step["url"] = "https://www.facebook.com/"
+        other = node_call({"action": "plan", "step": step})
+        self.assertTrue(all(f["required"] for f in other["fields"]))
+
+    def test_documented_facebook_and_linkedin_requirements_remain_required(self):
+        for domain, fields in [
+            ("facebook.com", [{"id": name} for name in ("xs", "c_user", "datr")]),
+            ("messenger.com", [{"id": name} for name in ("xs", "c_user", "datr")]),
+            ("linkedin.com", [{"id": name, "type": "header", "name": name} for name in ("Cookie", "X-LI-Track", "X-LI-Page-Instance")]),
+        ]:
+            with self.subTest(domain=domain):
+                plan = node_call({"action": "plan", "step": {"type": "cookies", "url": "https://" + domain + "/", "fields": fields}})
+                self.assertTrue(all(f["required"] for f in plan["fields"]))
+                with self.assertRaises(Failure):
+                    node_call({"action": "validate", "plan": plan, "payload": {"fields": {}, "lastURL": plan["url"]}})
+
+    def test_unsupported_extraction_is_rejected_instead_of_guessed_as_a_cookie(self):
+        for field in [
+            {"id": "auth_token", "required": True, "sources": [{"type": "special", "name": "fi.mau.slack.auth_token"}, {"type": "request_body", "name": "token"}]},
+            {"id": "future", "type": "future_storage"},
+            {"id": "special", "type": "special"},
+        ]:
+            with self.subTest(field=field), self.assertRaises(Failure):
+                node_call({"action": "plan", "step": {"type": "cookies", "url": "https://slack.com/signin", "fields": [field], "extractJS": "throw new Error('never execute')"}})
+
     def test_provider_families_and_supported_sources(self):
         for domain in ["instagram.com", "facebook.com", "messenger.com", "linkedin.com", "x.com", "twitter.com", "discord.com", "slack.com"]:
             plan = node_call({"action":"plan", "step":{"type":"cookies", "url":"https://www." + domain + "/", "fields":[

@@ -27,6 +27,10 @@ The local helper test exercises existing-session reuse and a separate login wind
 
 Checks also cover invalid domains, unrequested/missing fields, stale/cancelled sessions, saved browser preferences, absent native capability, and endpoint restrictions. API errors must not cause automatic retries. The companion extension, encrypted public relay, and their tests were removed in v0.5.0.
 
+Version 0.6.1 adds the reported Instagram regression: the live descriptor can list optional cookies without flags. The real local-browser fixture now requests all eight upstream Instagram cookies while issuing only the three core cookies, and must reach fresh approval in both browser modes. Unit cases verify omission of optional fields on submission, rejection of missing core cookies, precedence of explicit bridge flags, provider/source scoping, visible requirements in `network-show`/`browser-plan`, and replacement of old transfer keys when effective requirements change. No test reads a real provider session.
+
+The wider 0.6.1 audit covers all nine registered domains/aliases across cookie, local-storage and request-header sources; X's optional extras; required Facebook/LinkedIn fields; unsupported Slack extraction; native optional form fields and terminal transactions; and CLI subprocess error identity. Real browser checks cover safe progress events and optional omissions in local, cloud and native collectors. See [the complete login audit](../skills/beeper/references/login-audit.md).
+
 To test native browser form submission with the existing Chrome/Chromium and Node runtime, run this optional test from the repository root:
 
 ```sh
@@ -38,6 +42,8 @@ It uses a fresh headless browser profile and synthetic credentials against the f
 The real tool download can be checked independently with `bootstrap --cli-only` in an isolated `BEEPER_PLUGIN_HOME`. This downloads CLI and QR support but never installs/starts Server. Delete that test directory afterward if a clean machine is required.
 
 Validated locally on 2026-09-11: **48 tests passed** on Node **20.19.2**, including real Chromium forms, existing/fresh local collection, denial before and after collection, encrypted delivery, and the existing cloud/native collectors. Manifest and skill validation passed.
+
+Validated v0.6.1 on 2026-09-12: **64 tests passed in 89.878 seconds**, including all optional real-browser cases, using Python **3.14.7**, Node **26.8.2** and Chrome **153.0.8010.36** on Linux. The full run was sequential under the host's resource lock. The native-receiver fixture compares page tabs during cleanup because Chrome can create its own service-worker/background targets asynchronously. Manifest validation and `git diff --check` passed. This run did not repeat the earlier Node 20 compatibility validation.
 
 The local execution tool names were confirmed by the user's Bot: `ListMachines`, `Shell` with `machineId`, `AwaitShell`, `Read`, `CopyFromBox`, and `CopyToBox`, with approval for each local action. The public package was reconstructed and its standalone helper passed preflight using the installed Linux Grok 0.44.0 executable's embedded Node 24.15.0. No additional runtime was installed. The complete live Grok-to-PC flow remains an acceptance check.
 

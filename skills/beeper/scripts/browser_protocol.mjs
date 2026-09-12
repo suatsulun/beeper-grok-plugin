@@ -26,7 +26,8 @@ export function normalize(step, providers) {
   const fields = step.fields.map(field => {
     check(typeof field.id === 'string' && /^[\w.-]{1,100}$/.test(field.id) && !['__proto__','constructor','prototype'].includes(field.id));
     safeRegex(field.pattern);
-    const raw = field.sources?.length ? field.sources : [{type: field.type === 'header' ? 'request_header' : field.type === 'local_storage' ? 'local_storage' : 'cookie', name: field.name || field.id, cookieDomain: field.cookieDomain}];
+    const legacyType = {cookie:'cookie', header:'request_header', local_storage:'local_storage'}[field.type ?? 'cookie'];
+    const raw = field.sources?.length ? field.sources : [{type:legacyType, name: field.name || field.id, cookieDomain: field.cookieDomain}];
     check(Array.isArray(raw) && raw.length <= 8);
     const sources = raw.flatMap(source => {
       if (!['cookie','local_storage','request_header'].includes(source.type)) return [];
@@ -42,7 +43,14 @@ export function normalize(step, providers) {
       }
       return [s];
     });
-    const required = field.required ?? !field.optional;
+    check(field.required == null || typeof field.required === 'boolean');
+    check(field.optional == null || typeof field.optional === 'boolean');
+    // Some Server cookie descriptors omit requirement metadata. Do not turn
+    // documented optional sources into blockers. Explicit flags win; defaults
+    // are limited to this provider and the exact storage/header/cookie names.
+    const optionalSource = sources.length > 0 && sources.every(s =>
+      provider.optionalSources?.[s.type]?.includes(s.type === 'request_header' ? s.name.toLowerCase() : s.name));
+    const required = field.required ?? (field.optional == null ? !optionalSource : !field.optional);
     check(!required || sources.length > 0);
     return {id:field.id, required, pattern:field.pattern || '', sources};
   }).filter(f => f.sources.length);
@@ -65,9 +73,10 @@ export function complete(plan, fields, lastURL, providers) {
 export function validatePayload(plan, payload, providers) {
   validatePlan(plan, providers);
   const {fields, lastURL} = payload;
-  const ids = new Set(plan.fields.map(field => field.id));
+  const definitions = new Map(plan.fields.map(field => [field.id, field]));
   check(complete(plan, fields, lastURL, providers) &&
-    Object.entries(fields).every(([id, value]) => ids.has(id) && typeof value === 'string' && value.length <= 16384));
+    Object.entries(fields).every(([id, value]) => definitions.has(id) && typeof value === 'string' &&
+      value.length > 0 && value.length <= 16384 && (!definitions.get(id).pattern || safeRegex(definitions.get(id).pattern).test(value))));
   return payload;
 }
 export function selectFields(plan, cookies, storage = {}, headers = {}) {

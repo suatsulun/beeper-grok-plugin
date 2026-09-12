@@ -21,16 +21,20 @@ try {
   const originalTab = (await owner.send('Target.createTarget', {url:'about:blank'})).targetId;
   await owner.send('Storage.setCookies', {cookies:[
     {name:'sessionid', value:secret, domain:'.instagram.com', path:'/', secure:true, httpOnly:true},
+    {name:'csrftoken', value:'synthetic-csrf', domain:'.instagram.com', path:'/', secure:true},
+    {name:'ds_user_id', value:'123', domain:'.instagram.com', path:'/', secure:true},
     {name:'unrequested', value:'not-for-transfer', domain:'.instagram.com', path:'/', secure:true},
     {name:'sessionid', value:'wrong-provider', domain:'.facebook.com', path:'/', secure:true},
   ]});
   let delivered;
   for (const mode of ['existing', 'fresh', 'deny', 'cancel-ready']) {
     let consent, completed = false, outcome, browserOpened = false, activeSession = 'synthetic-stale-session';
+    const events = [];
     const task = runLocal(options.request, {binary:options.binary, root:path.join(options.root, 'local-helper'),
       dataDir:ownerProfile, open:false, headless:true, linger:0,
       extraArgs:['--host-resolver-rules=MAP *.instagram.com ~NOTFOUND'],
       onPage:page => { consent = page; },
+      emit:event => events.push(event),
       onBrowser:async browser => {
         browserOpened = true;
         const send = browser.send;
@@ -44,13 +48,17 @@ try {
           // Simulates completing a provider-site login in the fresh profile.
           void send('Fetch.fulfillRequest', {requestId:message.params.requestId, responseCode:200,
             responseHeaders:[{name:'Content-Type', value:'text/html'},
-              {name:'Set-Cookie', value:'sessionid=' + activeSession + '; Domain=.instagram.com; Path=/; Secure; HttpOnly'}],
+              {name:'Set-Cookie', value:'sessionid=' + activeSession + '; Domain=.instagram.com; Path=/; Secure; HttpOnly'},
+              {name:'Set-Cookie', value:'csrftoken=synthetic-csrf; Domain=.instagram.com; Path=/; Secure'},
+              {name:'Set-Cookie', value:'ds_user_id=123; Domain=.instagram.com; Path=/; Secure'}],
             body:Buffer.from('<!doctype html><h1>Synthetic provider account</h1>').toString('base64')}, message.sessionId).catch(() => {});
         });
       }}).then(value => { outcome = value; completed = true; }, () => { completed = true; });
     await waitFor(() => consent, 'Local approval page missing');
     // Even a matching CSRF value cannot authorize from another origin.
     const pageHTML = await (await fetch(consent.url)).text();
+    assert.ok(pageHTML.includes('Optional session fields: rur, shbid, shbts, mid, ig_did'));
+    assert.ok(pageHTML.includes('Missing optional fields will not block your transfer approval.'));
     const csrf = pageHTML.match(/name="csrf" value="([a-f0-9]+)"/)[1];
     const forbidden = await fetch(consent.url, {method:'POST', redirect:'manual', headers:{Origin:'https://example.invalid', 'Content-Type':'application/x-www-form-urlencoded'}, body:new URLSearchParams({csrf, action:'open', mode:'existing'})});
     assert.equal(forbidden.status, 403);
@@ -72,6 +80,9 @@ try {
       await evaluate(`document.querySelector('input[value=${browserMode}]').checked=true; document.querySelector('button[value=open]').click()`);
       await waitFor(() => evaluate("!!document.querySelector('button[value=transfer]')"), 'Transfer approval never appeared');
       assert.equal(completed, false, 'Ready session must wait for a new explicit approval');
+      assert.ok(events.some(e => e.data.phase === 'ready'), 'Grok receives a safe approval-ready event');
+      assert.ok(events.some(e => e.data.phase === 'collecting' && e.data.missingRequiredFields?.length === 0));
+      assert.ok(!JSON.stringify(events).includes(secret) && !JSON.stringify(events).includes(activeSession), 'Progress never exposes session values');
       assert.equal(outcome, undefined);
       // The user may select another provider account while reviewing approval.
       // The returned session must reflect the post-approval page, not a snapshot.

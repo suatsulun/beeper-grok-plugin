@@ -47,11 +47,12 @@ export async function approvalPage(request, {onState = () => {}} = {}) {
   validateRequest(request);
   const csrf = randomBytes(32).toString('hex'), route = '/connect/' + randomBytes(24).toString('hex');
   const abort = new AbortController();
-  let state = 'choose', message = '', selectedMode, resolveStart, resolveTransfer;
+  let state = 'choose', message = '', progress = {}, selectedMode, resolveStart, resolveTransfer;
   const started = new Promise(resolve => { resolveStart = resolve; });
   const approved = new Promise(resolve => { resolveTransfer = resolve; });
   const provider = providers.find(p => p.id === request.plan.provider);
-  const update = (next, text = '') => { state = next; message = text; onState(next); };
+  const optionalFields = request.plan.fields.filter(field => !field.required).map(field => field.id);
+  const update = (next, text = '', details = {}) => { state = next; message = text; progress = details; onState(next, details); };
   const stop = reason => { update(reason); abort.abort(); resolveStart(null); resolveTransfer(false); };
   const server = createServer(async (req, res) => {
     const origin = `http://127.0.0.1:${server.address().port}`;
@@ -70,13 +71,18 @@ export async function approvalPage(request, {onState = () => {}} = {}) {
         form('<label><input type="radio" name="mode" value="existing" checked> Use my open Chrome profile</label><p class="hint">Chrome chooses the shared profile. Check the account on the provider website before approving the transfer. Chrome 144+ and its built-in connection approval are required.</p><label><input type="radio" name="mode" value="fresh"> Open a separate login window on this PC</label><p class="hint">Use your PC clipboard to sign in. This window does not automatically inherit your normal Chrome profile or extensions.</p><button name="action" value="open">Open provider website</button>') +
         '<p class="hint">Chrome grants a browser debugging connection. This helper only reads the selected provider’s requested fields in its own tab. Nothing is transferred until you approve below.</p>';
       else if (state === 'ready') content = `<h1>Approve this transfer</h1><p>Check the account in the ${html(provider.name)} tab on this PC. Connect that account to Beeper Server on Grok?</p>` +
-        '<p>Only the required sign-in session is sent, encrypted. Passwords and session values are not displayed in chat. Approval applies to this transfer only.</p>' +
+        '<p>The requested sign-in session is sent encrypted. Passwords and session values are not displayed in chat. Approval applies to this transfer only.</p>' +
         form('<button name="action" value="transfer">Approve this transfer</button>');
+      else if (state === 'sending') content = '<h1>Preparing your approved session</h1><p>Keep the provider tab open while the helper refreshes and encrypts this session. No further click is needed.</p>';
+      else if (state === 'opening') content = '<h1>Opening the provider website</h1><p>Sign in there if needed, then return to this Beeper tab to approve the connection.</p>';
       else if (state === 'done') content = '<h1>Session prepared</h1><p>The encrypted session is ready for Grok to deliver to Beeper Server. Return to Grok to check whether the network connected.</p>';
       else if (state === 'denied') content = '<h1>Cancelled</h1><p>No session will be transferred.</p>';
-      else if (state === 'expired') content = '<h1>This request expired</h1><p>Return to Grok for a new request and approval.</p>';
+      else if (state === 'expired') content = '<h1>This request expired</h1><p>Keep your provider account signed in. Return to Grok for a new request and approval; signing in again is usually unnecessary.</p>';
       else if (state === 'failed') content = '<h1>Connection did not finish</h1><p>No session was transferred. Return to Grok to inspect the pending connection.</p>';
       else content = `<h1>${state === 'permission' ? 'Allow the Chrome connection' : 'Finish signing in'}</h1><p>${html(message || 'Use the provider website on this PC. This page will ask for your approval when the session is ready.')}</p>`;
+      if (optionalFields.length) content += `<p class="hint">Missing optional fields will not block your transfer approval.</p><details class="hint"><summary>Optional connection details</summary>Optional session fields: ${html(optionalFields.join(', '))}. Some signed-in sessions do not have these.</details>`;
+      if (state === 'collecting' && progress.missingRequiredFields?.length) content += `<details class="hint"><summary>What is the helper waiting for?</summary>Required session fields: ${html(progress.missingRequiredFields.join(', '))}. Optional fields are not included here.</details>`;
+      if (state === 'collecting' && progress.waitingForFinalPage) content += '<p class="hint">The provider has not yet reached the page required by its login flow. Complete any sign-in or verification on the provider tab.</p>';
       if (!['done','denied','expired','failed'].includes(state)) content += form('<button class="secondary" name="action" value="cancel">Cancel</button>');
       const refresh = ['opening','permission','collecting','sending'].includes(state) ? '<meta http-equiv="refresh" content="2">' : '';
       return respond(200, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${refresh}<title>Beeper — ${html(provider.name)}</title><style>body{font:17px system-ui;color:#152237;background:#f4f6fa;margin:0;padding:44px 20px}main{max-width:580px;margin:auto;padding:32px;background:white;border:1px solid #dde4ed;border-radius:18px}h1{font-size:28px}p{line-height:1.55}label{display:block;margin:18px 0 4px}button{border:0;border-radius:9px;padding:13px 20px;background:#1769e0;color:white;font:inherit;cursor:pointer}.secondary{margin-top:14px;background:#eaf0f8;color:#152237}.hint{color:#536275;font-size:14px}.brand{font-weight:700;color:#1769e0}</style><main><div class="brand">Beeper</div>${content}<p class="hint">Provider: ${html(new URL(request.plan.url).hostname)}</p></main></html>`);
@@ -110,7 +116,11 @@ export async function approvalPage(request, {onState = () => {}} = {}) {
 export async function runLocal(request, options = {}) {
   validateRequest(request);
   const binary = options.binary || await findChrome();
-  const consent = await approvalPage(request, {onState:options.onState});
+  const consent = await approvalPage(request, {onState:(state, details) => {
+    options.onState?.(state, details);
+    options.emit?.({success:true, data:{state:'local-browser-progress', phase:state, ...details,
+      ...(state === 'ready' ? {instruction:'The session is ready. Ask the user to return to the Beeper tab and click Approve this transfer. Do not click it yourself.'} : {})}});
+  }});
   let browser;
   const stop = () => consent.cancel();
   process.once('SIGTERM', stop); process.once('SIGINT', stop);
@@ -146,6 +156,7 @@ export async function runLocal(request, options = {}) {
     consent.update('collecting');
     const payload = await collectSession(browser, request.plan, {signal:consent.signal,
       timeout:Math.max(1, Math.floor((request.expires - Date.now()) / 1000)),
+      onProgress:status => consent.update('collecting', '', status),
       onReady:() => consent.approveTransfer()});
     if (consent.signal.aborted) throw Error('Cancelled.');
     const envelope = seal(request, payload);

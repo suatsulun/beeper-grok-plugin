@@ -94,6 +94,8 @@ class FakeBeeper:
                 return 400, {}
             self.signed_in = True
             return 200, {"matrix": {"accessToken": TOKEN}}
+        if path == setup + "/verification/recovery-key":
+            return 200, {}
         if path.startswith(setup + "/verifications"):
             if path.endswith("/sas/confirm"):
                 self.verification["state"] = "done"
@@ -302,6 +304,67 @@ class OnboardingTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError):
                 self.submit_form(form, {"phone": "+15550100000"})
         self.assertFalse(any("/steps/" in p for _, p, _, _ in self.api.requests))
+
+    def test_native_optional_fields_are_labeled_and_blank_values_are_omitted(self):
+        self.authenticate()
+        self.runtime.connect("test-bridge", "password-flow")
+        self.api.network["currentStep"]["fields"] += [
+            {"id": "region", "label": "Region", "optional": True},
+            {"id": "hint", "label": "Hint", "required": False},
+        ]
+        with self.form("network") as form:
+            with urllib.request.urlopen(form.url) as response: page = response.read().decode()
+            self.assertIn("Region (optional)", page)
+            self.assertIn("Hint (optional)", page)
+            for ident in ("region", "hint"):
+                self.assertNotIn("required", re.search(r'<input name="' + ident + r'"[^>]+>', page)[0])
+            self.submit_form(form, {"phone": "+15550100000", "region": "", "hint": ""})
+        sent = [body for _, path, body, _ in self.api.requests if "/steps/" in path]
+        self.assertEqual(sent[0]["fields"], {"phone": "+15550100000"})
+
+    def test_native_required_and_invalid_flags_never_submit_incomplete_input(self):
+        self.authenticate()
+        self.runtime.connect("test-bridge", "password-flow")
+        field = self.api.network["currentStep"]["fields"][0]
+        field.update(required=True, optional=True)
+        _, snapshot = self.runtime.input_fields("network")
+        with self.assertRaises(Failure) as caught: self.runtime.submit_input("network", {}, snapshot)
+        self.assertEqual(caught.exception.code, "missing_fields")
+        field["optional"] = "true"
+        with self.assertRaises(Failure) as caught: make_server(self.runtime, "network")
+        self.assertEqual(caught.exception.code, "invalid_input")
+        self.assertFalse(any("/steps/" in p for _, p, _, _ in self.api.requests))
+
+    def test_ended_native_login_cannot_accept_a_still_open_form(self):
+        self.authenticate()
+        self.runtime.connect("test-bridge", "password-flow")
+        with self.form("network") as form:
+            self.api.network["status"] = "cancelled"
+            self.api.network.pop("currentStep")
+            with self.assertRaises(urllib.error.HTTPError): self.submit_form(form, {"phone": "+15550100000"})
+        self.assertFalse(any("/steps/" in p for _, p, _, _ in self.api.requests))
+
+    def test_recovery_key_is_required_and_not_persisted(self):
+        self.authenticate()
+        with self.assertRaises(Failure) as caught: self.runtime.submit_input("recovery", {}, None)
+        self.assertEqual(caught.exception.code, "missing_fields")
+        with self.form("recovery") as form:
+            self.submit_form(form, {"recoveryKey": EMAIL_CODE})
+            self.assertTrue(form.done)
+        self.assertNotIn(EMAIL_CODE, self.runtime.state_file.read_text())
+
+    def test_qr_and_device_code_flows_keep_native_display_and_poll(self):
+        self.authenticate()
+        self.runtime.connect("test-bridge", "password-flow")
+        for display in ({"type": "qr", "data": "synthetic-qr"}, {"type": "code", "data": "SYNTHETIC"}):
+            self.api.network.update(status="waiting_for_display", currentStep={"type": "display_and_wait", "stepID": "display", "display": display})
+            with patch.object(self.runtime, "render_qr", return_value=self.root / "network-qr.png"):
+                view = self.runtime.network_view(self.api.network)
+            self.assertNotEqual(view.get("next"), "browser-start")
+            self.assertNotEqual(view.get("next"), "input network")
+        self.runtime.network_poll()
+        submitted = [body for method, path, body, _ in self.api.requests if method == "POST" and "/steps/" in path]
+        self.assertEqual(submitted, [{"type": "display_and_wait"}])
 
     def test_disabled_bridge_and_unknown_flow_do_not_create_sessions(self):
         self.authenticate()

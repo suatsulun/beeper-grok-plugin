@@ -20,6 +20,10 @@ Grok installs Server, guides Beeper sign-in and device verification, and connect
 
 Existing-session reuse uses Chrome 144+'s built-in connection permission. Enable it yourself at `chrome://inspect/#remote-debugging`, then approve Chrome's prompt. No extension, cookie-database reader, or extra application is needed. Grok must expose its local execution/copy tools and you must approve the local actions. If those are unavailable, the plugin reports that limitation. A cloud browser is used only if you explicitly choose it. QR/device-code flows keep their native steps. The plugin does not collect network passwords in generic forms. Browser login must be offered by the live Server bridge. See [browser login and compatibility](skills/beeper/references/browser-login.md).
 
+**Instagram does not need every optional cookie to reach approval.** Its upstream bridge requires `sessionid`, `csrftoken`, and `ds_user_id`; `shbid`, `shbts`, `rur`, `mid`, and `ig_did` are optional. Version 0.6.1 recognizes those optional cookies when the Server omits requirement flags, collects them if present, and does not ask you to browse more or sign in again just to create them. Explicit bridge requirements still take precedence. See the [cookie requirements guide](skills/beeper/references/browser-login.md#instagram-cookie-requirements) for the source and limitations.
+
+Version 0.6.1 also handles X's optional browser inputs, labels optional native form fields, and shows clearer progress before and after approval. Grok receives required-field diagnostics without session values, and CLI errors retain their specific cause. The [login audit](skills/beeper/references/login-audit.md) covers all six provider adapters, native methods, and recovery without unnecessary sign-ins. Slack's inspected token flow needs extraction this helper does not support; advanced X challenges can also require unsupported generation. Neither limitation is fixed by skipping required fields.
+
 ## Install the plugin
 
 For local development in Grok CLI:
@@ -49,7 +53,7 @@ Automatic setup downloads Beeper CLI 0.6.2 and qrcode 8.2 from their official re
 
 Data lives in `/workspace/.beeper-grok` on Grok Bot, or `~/.local/share/beeper-grok-plugin` elsewhere. `BEEPER_PLUGIN_HOME` selects another persistent location. Credentials and pending login state stay outside the plugin files with private filesystem permissions. All Bots on one Grok account share its cloud computer. See [Grok Bot's computer model](https://docs.x.ai/grok-bot/computer-and-apps).
 
-The browser helper collects only fields required by the selected provider: named cookies, local-storage entries, and request headers from its own provider tab. It never runs bridge-supplied JavaScript or reads the browser's cookie database or password vault. Chrome grants a browser debugging connection; the helper limits its collection to that provider. Existing-session reuse still depends on the provider accepting that session; MFA or fresh sign-in may be required.
+The browser helper collects only fields requested by the selected provider: required fields and any optional fields present, from named cookies, local-storage entries, and request headers in its own provider tab. It never runs bridge-supplied JavaScript or reads the browser's cookie database or password vault. Chrome grants a browser debugging connection; the helper limits its collection to that provider. Existing-session reuse still depends on the provider accepting that session; MFA or fresh sign-in may be required.
 
 The helper binds its temporary approval page to loopback on the PC. It discovers existing Chrome only through its user-enabled `DevToolsActivePort` metadata; it does not scan ports or enable Chrome permissions itself. It closes its own provider tab and preserves other tabs and an existing browser. Separate local login profiles persist under `~/.beeper-browser/profiles` and use private debugging pipes.
 

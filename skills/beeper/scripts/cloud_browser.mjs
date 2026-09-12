@@ -108,7 +108,7 @@ export async function connectBrowserWebSocket(endpoint, {connectTimeout = 5000, 
   return {send, listeners, close:async () => { signal?.removeEventListener('abort', abort); closed(); socket.close(); }};
 }
 
-export async function collectSession(browser, plan, {timeout = 600, providers:registry = providers, navigateURL, signal, onReady} = {}) {
+export async function collectSession(browser, plan, {timeout = 600, providers:registry = providers, navigateURL, signal, onReady, onProgress} = {}) {
   const provider = validatePlan(plan, registry);
   if (signal?.aborted) throw Error('Browser login cancelled.');
   const {targetId} = await browser.send('Target.createTarget', {url:'about:blank'});
@@ -142,7 +142,12 @@ export async function collectSession(browser, plan, {timeout = 600, providers:re
     try {
       await send('Page.navigate', {url:navigateURL || plan.url});
       const deadline = Date.now() + timeout * 1000;
-      let approved = !onReady;
+      let approved = !onReady, lastProgress;
+      const progress = (fields, finalPageReady) => {
+        const status = {missingRequiredFields:plan.fields.filter(f => f.required && !fields[f.id]).map(f => f.id), waitingForFinalPage:!finalPageReady};
+        const key = JSON.stringify(status);
+        if (!approved && key !== lastProgress) { lastProgress = key; onProgress?.(status); }
+      };
       while (Date.now() < deadline) {
         if (signal?.aborted) throw Error('Browser login cancelled.');
         const page = await send('Runtime.evaluate', {expression:'location.href', returnByValue:true});
@@ -155,6 +160,7 @@ export async function collectSession(browser, plan, {timeout = 600, providers:re
           const names = [...new Set(plan.fields.flatMap(f => f.sources.filter(s => s.type === 'local_storage').map(s => s.name)))];
           const {result} = await send('Runtime.evaluate', {expression:`Object.fromEntries(${JSON.stringify(names)}.map(key => [key, localStorage.getItem(key)]))`, returnByValue:true});
           const fields = selectFields(plan, cookies, result.value || {}, headers);
+          progress(fields, !plan.expectedFinalURLRegex || safeRegex(plan.expectedFinalURLRegex).test(lastURL));
           if (complete(plan, fields, lastURL, registry)) {
             if (!approved) {
               await onReady();
@@ -179,7 +185,7 @@ export async function collectSession(browser, plan, {timeout = 600, providers:re
             }
             return {fields, lastURL};
           }
-        }
+        } else progress({}, false);
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
       throw Error('Provider sign-in timed out.');

@@ -345,14 +345,14 @@ class Runtime:
         result = {k: session[k] for k in ("bridgeID", "loginSessionID", "status", "accountID", "loginID") if k in session}
         result["step"] = {k: step[k] for k in ("type", "stepID", "instructions") if k in step}
         if step.get("fields"):
-            result["step"]["fields"] = [{k: f[k] for k in ("id", "label", "type", "optional") if k in f} for f in step["fields"]]
+            result["step"]["fields"] = [{k: f[k] for k in ("id", "label", "type", "required", "optional") if k in f} for f in step["fields"]]
             result["next"] = "input network"
         if step.get("url"):
             result["step"]["url"] = step["url"]
         if step.get("type") == "cookies":
             result["next"] = "browser-start"
             result["browserMode"] = self.state().get("network", {}).get("browser", "auto")
-            result["instruction"] = "Read browser-login.md. Run browser-start for a local browser request and execute its bundled helper on the user's PC through Grok Desktop. Reuse an approved Chrome session or open the provider website on that PC; every transfer requires fresh approval. Do not silently use Grok's cloud browser."
+            result["instruction"] = "Read browser-login.md and run browser-plan for effective requiredFields and optionalFields; absence of an optional flag does not prove a cookie is required. Missing optional cookies do not block approval. Run browser-start for a local browser request and execute its bundled helper on the user's PC through Grok Desktop. Every transfer requires fresh approval. Do not silently use Grok's cloud browser."
         if step.get("type") == "user_input" and self.credential_fields(step.get("fields", [])):
             result["next"] = "choose-supported-flow"
             result["instruction"] = "This flow requires direct network credentials. The plugin uses provider websites for password sign-in. Inspect flows for a supported website or QR option; if none exists, explain that this Server bridge cannot use browser login."
@@ -413,6 +413,8 @@ class Runtime:
             return [{"id": "recoveryKey", "label": "Existing Beeper recovery key"}], None
         if kind == "network":
             session = self.network_session()
+            if session.get("status") in TERMINAL:
+                raise Failure("This network login has ended. Inspect accounts and network-show before another input.", "stale_input")
             step = session.get("currentStep") or {}
             if step.get("type") == "cookies":
                 raise Failure("Use browser-start to sign in on the provider website.", "browser_login_required")
@@ -432,14 +434,24 @@ class Runtime:
                 return True
         return False
 
+    @staticmethod
+    def input_field_required(field):
+        for flag in ("required", "optional"):
+            if field.get(flag) is not None and not isinstance(field[flag], bool):
+                raise Failure("The input step has invalid requirement flags. Inspect the live bridge definition.", "invalid_input")
+        if field.get("required") is not None:
+            return field["required"]
+        return not field.get("optional", False)
+
     def submit_input(self, kind, fields, snapshot):
         self.writable()
         expected, current = self.input_fields(kind)
         if snapshot != current:
             raise Failure("This form is stale. Open a new form for the current step.", "stale_input")
         allowed = {field["id"] for field in expected}
-        fields = {k: v for k, v in fields.items() if k in allowed}
-        if any(not f.get("optional") and not fields.get(f["id"]) for f in expected):
+        required = {field["id"] for field in expected if self.input_field_required(field)}
+        fields = {k: v for k, v in fields.items() if k in allowed and (k in required or v != "")}
+        if any(not fields.get(ident) for ident in required):
             raise Failure("Complete all required fields.", "missing_fields")
         if kind == "email":
             return self.finish_login(self.api("POST", SETUP + "/response", {"setupRequestID": current, "response": fields["code"]}, public=True))
@@ -452,8 +464,8 @@ class Runtime:
             self.api("POST", SETUP + "/verification/recovery-key", {"recoveryKey": fields["recoveryKey"]})
             return {"submitted": True}
         session = self.network_session()
-        step = session["currentStep"]
-        if (session["loginSessionID"], step["stepID"]) != current:
+        step = session.get("currentStep") or {}
+        if session.get("status") in TERMINAL or (session.get("loginSessionID"), step.get("stepID")) != current:
             raise Failure("The network advanced to another step. Open a new form.", "stale_input")
         result = self.api("POST", self.network_path() + "/steps/" + segment(step["stepID"]), {"type": step["type"], "fields": fields, "source": "api"})
         if result["status"] in TERMINAL:
@@ -589,4 +601,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # Browser/input modules import Failure from beeper. Share this module when
+    # launched as a script so their exceptions keep their specific error codes.
+    sys.modules["beeper"] = sys.modules[__name__]
     main()

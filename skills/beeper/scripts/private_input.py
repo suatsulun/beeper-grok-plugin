@@ -11,6 +11,8 @@ def make_server(runtime, kind):
     with runtime.lock():
         runtime.writable()
         fields, snapshot = runtime.input_fields(kind)
+        for field in fields:
+            runtime.input_field_required(field)
     nonce = secrets.token_urlsafe(32)
     csrf = secrets.token_urlsafe(32)
     path = "/" + nonce
@@ -48,9 +50,10 @@ def make_server(runtime, kind):
             controls = []
             for field in fields:
                 ident = html.escape(field["id"], quote=True)
-                label = html.escape(field.get("label") or field["id"])
+                is_required = runtime.input_field_required(field)
+                label = html.escape(field.get("label") or field["id"]) + ("" if is_required else " (optional)")
                 field_type = "checkbox" if field.get("type") == "checkbox" else ("text" if kind == "register" else "password")
-                required = "" if field.get("optional") else "required"
+                required = "required" if is_required else ""
                 controls.append(f'<label>{label}<input name="{ident}" type="{field_type}" {required} autocomplete="off"></label>')
             terms = '<p><a href="https://www.beeper.com/terms" target="_blank" rel="noreferrer">Beeper Terms of Use</a> · <a href="https://www.beeper.com/privacy" target="_blank" rel="noreferrer">Privacy Policy</a></p>' if kind == "register" else ""
             self.reply(200, '<!doctype html><html lang="en"><meta charset="utf-8"><title>Beeper sign-in</title>'

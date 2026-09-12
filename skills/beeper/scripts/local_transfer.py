@@ -15,7 +15,8 @@ def prepare_transfer(runtime, plan, snapshot):
     now = int(time.time() * 1000)
     state_file = runtime.root / "browser-transfer.json"
     previous = read_json(state_file)
-    if previous.get("snapshot") == list(snapshot) and previous.get("request", {}).get("expires", 0) > now and not previous.get("consumed"):
+    if (previous.get("snapshot") == list(snapshot) and previous.get("request", {}).get("expires", 0) > now
+            and previous["request"].get("plan") == plan and not previous.get("consumed")):
         request = previous["request"]
     else:
         pair = node_call({"action": "transfer-keypair"})
@@ -33,6 +34,8 @@ def prepare_transfer(runtime, plan, snapshot):
     package = runtime.root / "local-browser-package.json"
     write_json(package, {"format": "beeper-local-browser-package-v1", "id": request["id"], "files": files})
     return {"state": "local-browser-required", "provider": plan["provider"], "expires": request["expires"],
+            "requiredFields": [field["id"] for field in plan["fields"] if field["required"]],
+            "optionalFields": [field["id"] for field in plan["fields"] if not field["required"]],
             "localPackage": str(package), "approval": "Required on the PC for every transfer",
             "instruction": "Run the bundled local_browser.mjs through Grok Desktop's approved LOCAL execution, using existing Node or Grok's embedded Node. Copy only this public package to the PC. The user chooses an existing Chrome session or a separate local login window, then approves this transfer. Return only the encrypted envelope via browser-finish --file. Never substitute a cloud browser automatically."}
 
