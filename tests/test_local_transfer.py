@@ -122,6 +122,28 @@ class LocalTransferTests(unittest.TestCase):
         self.assertEqual(code, 0, response)
         self.assertEqual(self.submissions()[0]["fields"], {"sessionid":SECRET, "csrftoken":"synthetic-csrf", "ds_user_id":"123"})
 
+    def test_chrome_setup_and_denied_permission_do_not_fallback_or_transfer(self):
+        result = subprocess.run(["node", str(REPO / "tests/chrome-permission-smoke.mjs")],
+                                input=json.dumps({"root":str(self.root), "request":self.state["request"]}),
+                                cwd=REPO, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(json.loads(result.stdout)["passed"])
+        self.assertEqual(self.submissions(), [])
+
+    @unittest.skipUnless(os.environ.get("BEEPER_BROWSER_TEST") == "1", "optional normal-profile browser test")
+    def test_normal_profile_direct_login_preserves_shared_browser_and_tabs(self):
+        result = subprocess.run(["node", str(REPO / "tests/existing-direct-browser-smoke.mjs")],
+                                input=json.dumps({"root":str(self.root), "binary":os.environ.get("BEEPER_TEST_CHROME", "/usr/bin/google-chrome"),
+                                                  "request":self.state["request"]}),
+                                capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn(SECRET, result.stdout + result.stderr)
+        data = json.loads(result.stdout)
+        self.assertTrue(data["passed"])
+        code, response = self.finish_stdin(json.dumps(data["envelope"]).encode())
+        self.assertEqual(code, 0, response)
+        self.assertEqual(self.submissions()[0]["fields"], {"sessionid":SECRET})
+
     def test_cli_finish_reports_success_and_specific_replay_error(self):
         envelope = self.encrypted()
         code, result = self.finish_command(envelope)

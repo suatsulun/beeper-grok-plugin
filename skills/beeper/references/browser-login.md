@@ -1,6 +1,6 @@
 # Provider sign-in on the user's PC
 
-Default to opening the provider directly in a dedicated Chrome window on the user's PC. No Beeper page precedes login and no Chrome setting change is needed. **Every session transfer still requires fresh local approval for the exact connect-and-transfer action.** Obtain it through Grok's normal local command prompt, identifying the provider and Beeper Server on Grok as the destination. Never approve for the user, use a standing grant, or switch local execution to always allowed. If this approval cannot be obtained, stop and report the platform limitation. Reusing an ordinary Chrome profile is an explicit alternative described below. No automatic cloud-browser fallback.
+Default to opening a new provider window in the user’s **normal Chrome profile** on their PC, preserving its sign-ins, extensions and saved-password tools. Chrome 144+ requires the user to enable its connection setting and approve its connection prompt. No Beeper page precedes login. **Every session transfer still requires fresh local approval for the exact connect-and-transfer action.** Obtain it through Grok’s normal local command prompt, identifying the provider and Beeper Server on Grok as the destination. Never approve for the user, use a standing grant, enable Chrome’s setting yourself or switch local execution to always allowed. If approval or Chrome access is unavailable, stop and report the limitation. Never silently open a separate profile or cloud browser.
 
 Use the existing `cookies` step returned by Server. Keep its saved login transaction. Do not invent flow IDs or convert password/mobile-API flows into cookie flows.
 
@@ -41,6 +41,8 @@ env ELECTRON_RUN_AS_NODE=1 '/opt/Grok Bot/grok-bot' LOCAL_DIR/local_browser.mjs 
 
 On macOS/Windows, find the actual installed Grok executable and set `ELECTRON_RUN_AS_NODE=1` only for that helper process. Do not change global environment variables or relaunch the desktop app. Alternatively, an already installed Node can run `node --experimental-websocket LOCAL_DIR/local_browser.mjs check`. If the installed app disables this runtime mode and no suitable Node exists, report that limitation rather than asking for an installation. Linux is tested; macOS/Windows paths and native UI require acceptance testing.
 
+Prepare Chrome access before starting a new time-sensitive bridge login. Ask the user to open the normal Chrome profile they want to use and enable its connection setting at `chrome://inspect/#remote-debugging`. The helper’s read-only `check` reports `existingChromeMetadata`; this only means connection metadata exists, not that it is live or permission has been granted. It does not inspect passwords/cookies or change settings. Chrome’s permission prompt appears when the approved local command connects. Chrome chooses the shared profile; do not assume another open profile is included. A saved provider session can transfer immediately, so identify the intended account/profile before the local action. Grok’s scoped transfer approval and Chrome’s browser-debugging permission are distinct.
+
 ## Prepare and copy the bundled helper
 
 On the cloud computer:
@@ -57,7 +59,7 @@ Reuse the machine/runtime already confirmed in this session when nothing has cha
 
 If no file-copy tool exists, the public package can be carried as base64 in approved local command input and decoded with Node's built-in `fs` and `crypto`. Keep command arguments as data, honor shell size limits, and never include the cloud `browser-transfer.json`, target/config files, or private key. Do not use `/tmp` for the helper or browser profiles.
 
-Describe the local action as opening this provider and automatically returning its encrypted sign-in session to Beeper Server on Grok for this one request. `browser-start` returns `approvalScope` with the provider, destination, request ID and expiry. The command flag does not prove approval; Grok must obtain a fresh local approval before executing it, including when a dedicated profile already has a saved sign-in.
+Describe the local action as opening this provider in the user’s approved normal Chrome profile and automatically returning its encrypted sign-in session to Beeper Server on Grok for this one request. `browser-start` returns `approvalScope` with the provider, destination, request ID and expiry. The command flag does not prove approval; Grok must obtain a fresh local approval before executing it, including when the profile already has a saved sign-in.
 
 Run on the **PC** after that approval, using the same verified runtime:
 
@@ -65,15 +67,15 @@ Run on the **PC** after that approval, using the same verified runtime:
 env ELECTRON_RUN_AS_NODE=1 '/opt/Grok Bot/grok-bot' LOCAL_DIR/local_browser.mjs connect LOCAL_DIR/request.json --transfer-on-login
 ```
 
-The same command works with an existing Node executable instead of the Grok runtime. Keep the local action's job ID and await its result on the same PC. The provider page opens directly; do not open an extra Beeper form or `chrome://inspect`. This owned browser uses a private debugging pipe, not a setting on the user's ordinary Chrome profile.
+The same command works with an existing Node executable instead of the Grok runtime. Keep the local action’s job ID and await its result on the same PC. If Chrome connection metadata is missing, the helper opens Chrome’s connection settings page and emits `phase: chrome-setup`; the user enables the setting. At `phase: chrome-permission`, the user approves Chrome’s prompt. Once connected, the helper creates a new provider window in the shared normal profile without a Beeper form. It does not attach to an unrelated existing tab or create an incognito context. Denial/unavailable transport returns `chrome_connection_failed`; setup expiry returns `chrome_setup_required`. Do not retry a denied connection automatically or substitute a separate profile. The normal-profile route uses Chrome’s approved loopback connection, not private-pipe launch flags on the default data directory.
 
 ## User interaction
 
-The user signs in on the provider page and handles any MFA, passkey or CAPTCHA requested there. Their PC clipboard works. The dedicated profile persists under `~/.beeper-browser/profiles/PROVIDER`; it does not copy ordinary browser extensions, autofill, cookies or passwords. A retained signed-in account may complete immediately, which must be clear in the approved local action.
+The provider opens in the approved normal profile, where the user’s usual clipboard, extensions and saved-password tools remain available according to their own settings. The helper does not copy or read a password vault. The user handles any password autofill unlock, MFA, passkey or CAPTCHA required by Chrome/the provider. A retained signed-in account may complete immediately, which must be clear in the approved local action.
 
 The collector detects the required fields and final page, encrypts the session and returns it automatically. Missing optional fields do not delay it. There is no second Beeper transfer click and the user need not return to chat to say “done.” Closing the provider window before completion, cancellation or expiry stops the transfer.
 
-After returning ciphertext, the same window displays **You can close this window now**. This means the local handoff is ready, not that Server has accepted it. The parent command finishes immediately while a detached worker keeps only that completion window alive until it is closed, for at most five minutes. Do not await window closure before submission. This is not a persistent service. If a later request finds the same dedicated profile still open, let the user close the previous completion window; do not copy a profile or attach to an unrelated browser as a workaround.
+After returning ciphertext, the same window displays **You can close this window now**. This means the local handoff is ready, not that Server has accepted it. The parent command finishes immediately while a detached worker keeps only that completion window alive until it is closed, for at most five minutes. Do not await window closure before submission. Cleanup closes only the helper-created target and disconnects, preserving normal Chrome and unrelated tabs. If Chrome revokes/disconnects access, stop without reconnecting; a remaining helper tab can be closed by the user. This is not a persistent service.
 
 ## Deliver the encrypted session
 
@@ -99,7 +101,9 @@ Check `network-show` and `accounts` afterward, then a scoped chat read. An encry
 
 ## Other supported modes
 
-If the user explicitly wants to reuse their ordinary Chrome profile, omit `--transfer-on-login`. The legacy local review page offers existing-profile reuse or its separate-window mode and requires a fresh **Approve this transfer** click after login. Existing-profile reuse requires Chrome 144+, the user's own `chrome://inspect/#remote-debugging` setting and Chrome's connection prompt. Never enable or approve those for the user. Chrome chooses the shared profile; the user reviews that account before transfer. The collector refreshes after approval and preserves unrelated tabs. This optional route is not the default and is not needed for direct dedicated-window login.
+Only if the user requests a separate profile, add `--separate-profile` to `connect REQUEST.json --transfer-on-login`. This retains v0.6.2’s private-pipe browser under `~/.beeper-browser/profiles/PROVIDER`, with no Chrome setting or connection prompt. It lacks the user’s ordinary extensions and saved passwords; explain that difference before choosing it. It keeps its own provider sign-in. A completion window can occupy that dedicated profile until closed or the five-minute limit; never copy a profile to bypass its lock.
+
+If the user explicitly wants to review the provider account and approve again after login, omit `--transfer-on-login`. The legacy local page offers existing-profile reuse or a separate window and requires **Approve this transfer**. Existing-profile reuse still requires Chrome’s setting/prompt. The collector refreshes after transfer approval and preserves unrelated tabs. This extra Beeper review is not the default.
 
 Grok's native cookie import remains optional when exposed. It requires a new user approval for this transfer and the receiving cloud browser endpoint, then `browser-start --browser native --cdp-url http://127.0.0.1:PORT`. Do not rely on a standing import grant. The bundled local path above does not depend on this feature.
 

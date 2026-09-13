@@ -17,7 +17,7 @@ for (const mode of ['success','cancel','closed','expiry','pre-cancel']) {
   if (mode === 'pre-cancel') signal.abort();
   const request = {...options.request, ...(mode === 'expiry' ? {expires:Date.now() + 4000} : {})};
   const task = runDirectLocal(request, {
-    binary:options.binary, root:path.join(options.root, 'direct-' + mode), headless:true,
+    profileMode:'separate', binary:options.binary, root:path.join(options.root, 'direct-' + mode), headless:true,
     extraArgs:['--host-resolver-rules=MAP *.instagram.com ~NOTFOUND'], signal:signal.signal,
     completionLinger:30000, emit:event => events.push(event),
     onEnvelope:value => { envelope = value; },
