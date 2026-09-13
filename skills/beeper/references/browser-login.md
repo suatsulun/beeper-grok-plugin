@@ -1,6 +1,6 @@
 # Provider sign-in on the user's PC
 
-Default to the user's PC for supported network website logins. Reuse their approved existing Chrome session or open a separate provider login window there. **Every local session transfer requires a fresh approval.** Do not substitute Grok's cloud browser because local access is unavailable.
+Default to opening the provider directly in a dedicated Chrome window on the user's PC. No Beeper page precedes login and no Chrome setting change is needed. **Every session transfer still requires fresh local approval for the exact connect-and-transfer action.** Obtain it through Grok's normal local command prompt, identifying the provider and Beeper Server on Grok as the destination. Never approve for the user, use a standing grant, or switch local execution to always allowed. If this approval cannot be obtained, stop and report the platform limitation. Reusing an ordinary Chrome profile is an explicit alternative described below. No automatic cloud-browser fallback.
 
 Use the existing `cookies` step returned by Server. Keep its saved login transaction. Do not invent flow IDs or convert password/mobile-API flows into cookie flows.
 
@@ -53,30 +53,39 @@ It returns `localPackage`: a JSON package containing five plugin modules and `re
 
 Use **CopyFromBox** according to its exposed schema to copy this public cloud package to the selected PC, then the approved machine-targeted **Shell** to decode that package into a private, disk-backed directory on the PC, such as `~/.cache/beeper-browser/REQUEST_ID` (the platform equivalent on Windows). Verify every SHA-256 and allow only these filenames: `local_browser.mjs`, `cloud_browser.mjs`, `browser_protocol.mjs`, `browser_transfer.mjs`, `providers.mjs`, `request.json`. Create files with private permissions where supported. This is executing the plugin's bundled code, not installing an application or extension. The agent performs this step; do not ask the user to download dependencies, reconstruct files, or copy session values.
 
+Reuse the machine/runtime already confirmed in this session when nothing has changed. Where the real Shell tool supports carrying this public package as input, combine verification, unpacking and launch in one approved local action instead of asking for separate unpack/start actions. Keep the connect-and-transfer scope explicit. Never change tool approval settings to reduce prompts.
+
 If no file-copy tool exists, the public package can be carried as base64 in approved local command input and decoded with Node's built-in `fs` and `crypto`. Keep command arguments as data, honor shell size limits, and never include the cloud `browser-transfer.json`, target/config files, or private key. Do not use `/tmp` for the helper or browser profiles.
 
-Run on the **PC**, keeping the local tool/process alive:
+Describe the local action as opening this provider and automatically returning its encrypted sign-in session to Beeper Server on Grok for this one request. `browser-start` returns `approvalScope` with the provider, destination, request ID and expiry. The command flag does not prove approval; Grok must obtain a fresh local approval before executing it, including when a dedicated profile already has a saved sign-in.
+
+Run on the **PC** after that approval, using the same verified runtime:
 
 ```sh
-env ELECTRON_RUN_AS_NODE=1 '/opt/Grok Bot/grok-bot' LOCAL_DIR/local_browser.mjs connect LOCAL_DIR/request.json
+env ELECTRON_RUN_AS_NODE=1 '/opt/Grok Bot/grok-bot' LOCAL_DIR/local_browser.mjs connect LOCAL_DIR/request.json --transfer-on-login
 ```
 
-Use the same verified local runtime as the preflight. The helper opens its approval page in the PC's Chrome and returns a local `approvalURL`. If the page did not open, open that URL **on the PC**. The Bot must never click either approval button for the user.
+The same command works with an existing Node executable instead of the Grok runtime. Keep the local action's job ID and await its result on the same PC. The provider page opens directly; do not open an extra Beeper form or `chrome://inspect`. This owned browser uses a private debugging pipe, not a setting on the user's ordinary Chrome profile.
 
 ## User interaction
 
-The local page offers two choices:
+The user signs in on the provider page and handles any MFA, passkey or CAPTCHA requested there. Their PC clipboard works. The dedicated profile persists under `~/.beeper-browser/profiles/PROVIDER`; it does not copy ordinary browser extensions, autofill, cookies or passwords. A retained signed-in account may complete immediately, which must be clear in the approved local action.
 
-- **Use my open Chrome profile:** Chrome 144+ can expose an existing session after the user enables its built-in setting at `chrome://inspect/#remote-debugging` and approves Chrome's connection prompt. The helper opens that settings page when needed but never enables it itself. Chrome selects the shared profile; ask the user to check the account on the provider website. Chrome's connection permission covers the browser, while this helper reads only requested fields from its own selected-provider tab. No cookie database, password vault, profile copy, or extension is used.
-- **Open a separate login window on this PC:** the provider site opens in an owned Chrome profile under `~/.beeper-browser/profiles/PROVIDER`. The user signs in there with their PC clipboard. Their usual browser extensions/autofill are not automatically copied into this separate profile.
+The collector detects the required fields and final page, encrypts the session and returns it automatically. Missing optional fields do not delay it. There is no second Beeper transfer click and the user need not return to chat to say “done.” Closing the provider window before completion, cancellation or expiry stops the transfer.
 
-Both paths open the actual provider website locally. Once the necessary session is available, the approval page asks **“Approve this transfer.”** Let the user review the provider account and click it themselves. No saved permission, earlier login, previous transfer, or chat response replaces this click. Denial/expiry sends no session. The collector refreshes and re-reads the session after approval so it does not submit a pre-approval account snapshot.
-
-The helper then closes its provider tab, leaving an existing browser and unrelated tabs open; an owned browser closes. It returns an encrypted envelope and saves `request.json.encrypted.json`. The helper does not return raw cookies, tokens, local storage, headers, or passwords. The small local HTTP approval server binds only to loopback and closes at completion.
+After returning ciphertext, the same window displays **You can close this window now**. This means the local handoff is ready, not that Server has accepted it. The parent command finishes immediately while a detached worker keeps only that completion window alive until it is closed, for at most five minutes. Do not await window closure before submission. This is not a persistent service. If a later request finds the same dedicated profile still open, let the user close the previous completion window; do not copy a profile or attach to an unrelated browser as a workaround.
 
 ## Deliver the encrypted session
 
-Use **CopyToBox** to return the encrypted file from that same PC, or carry the encrypted envelope returned by the local **Shell/AwaitShell** result. Check the actual copy-tool schema for source and destination arguments. Never return the browser profile or any plaintext session file. Save it as an ordinary JSON file on the cloud computer, then run:
+The final **Shell/AwaitShell** result has `data.state: encrypted-transfer-ready` and an `envelope`. Pass just that envelope object as JSON on stdin to this command on the cloud computer:
+
+```sh
+python3 HELPER browser-finish --stdin
+```
+
+Use the cloud tool's supported stdin input or write the returned ciphertext to a cloud file as data. Do not interpolate values into shell code, include progress records in the envelope, or ask the user to copy anything. The result already contains the ciphertext, so no extra local Read/CopyToBox action is needed. Submit immediately once; the fresh local approval covered this transfer.
+
+If the local tool cannot return the envelope, use its saved `request.json.encrypted.json` through the actual **CopyToBox** schema and finish with the retained file interface:
 
 ```sh
 python3 HELPER browser-finish --file ENCRYPTED_FILE.json
@@ -84,11 +93,13 @@ python3 HELPER browser-finish --file ENCRYPTED_FILE.json
 
 The cloud helper authenticates/decrypts it, checks the same pending login step, consumes the request before submission, and sends the required fields directly to Beeper Server. Encryption uses X25519, HKDF-SHA-256, and AES-256-GCM with the full request bound as authenticated context. No Cloudflare tunnel or public receiver is needed. Grok handles the ciphertext, not session plaintext in its transcript.
 
-Check `network-show` and `accounts` afterward, then a scoped chat read. An encrypted transfer being ready is not proof of Beeper accepting it or of messaging readiness. If delivery fails or times out, inspect the current state before requesting a new approval; never replay or automatically repeat submission. Follow the [recovery sequence](login-audit.md#keep-connection-recovery-simple) to distinguish transfer expiry from an expired bridge transaction and avoid unnecessary sign-ins. Await the existing local job's progress events; `phase: ready` means ask for the user's transfer click, and `encrypted-transfer-ready` means deliver that ciphertext once without an additional confirmation round.
+Check `network-show` and `accounts` afterward, then a scoped chat read. An encrypted transfer being ready is not proof of Beeper accepting it or of messaging readiness. If delivery fails or times out, inspect the current state before requesting a new approval; never replay or automatically repeat submission. Follow the [recovery sequence](login-audit.md#keep-connection-recovery-simple) to distinguish transfer expiry from an expired bridge transaction. Direct mode emits safe `opening`/`collecting` progress, then the result. Only the explicitly selected reviewed alternative below waits at `phase: ready` for a transfer click.
 
 `browser-cancel` invalidates the transfer while preserving the pending network login. `network-cancel` cancels that login and invalidates its transfer. Cancellation on the PC closes collection without a payload. After cancellation or expiry, prepare a new request and require approval again. Remove temporary public packages and encrypted output after completion; retain the user's owned browser profile unless they request its removal.
 
 ## Other supported modes
+
+If the user explicitly wants to reuse their ordinary Chrome profile, omit `--transfer-on-login`. The legacy local review page offers existing-profile reuse or its separate-window mode and requires a fresh **Approve this transfer** click after login. Existing-profile reuse requires Chrome 144+, the user's own `chrome://inspect/#remote-debugging` setting and Chrome's connection prompt. Never enable or approve those for the user. Chrome chooses the shared profile; the user reviews that account before transfer. The collector refreshes after approval and preserves unrelated tabs. This optional route is not the default and is not needed for direct dedicated-window login.
 
 Grok's native cookie import remains optional when exposed. It requires a new user approval for this transfer and the receiving cloud browser endpoint, then `browser-start --browser native --cdp-url http://127.0.0.1:PORT`. Do not rely on a standing import grant. The bundled local path above does not depend on this feature.
 

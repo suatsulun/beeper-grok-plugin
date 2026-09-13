@@ -175,8 +175,125 @@ export async function runLocal(request, options = {}) {
   }
 }
 
+export function completionHTML(provider) {
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>Beeper — Sign-in received</title><style>body{font:18px system-ui;background:#f4f6fa;color:#152237;margin:0;padding:80px 24px}main{max-width:560px;margin:auto;padding:36px;background:white;border-radius:20px}h1{font-size:30px}p{line-height:1.6}</style><main><h1>You can close this window now</h1><p>Your ${html(provider.name)} sign-in is ready to return to Grok, encrypted. Grok will finish connecting it to Beeper and confirm the result in chat.</p></main></html>`;
+}
+
+// The user authorizes this exact connect-and-transfer operation through Grok's
+// normal local-action approval. No browser setting or separate Beeper form is
+// needed. Existing-profile reuse remains an explicit legacy alternative above.
+export async function runDirectLocal(request, options = {}) {
+  validateRequest(request);
+  const binary = options.binary || await findChrome();
+  const provider = providers.find(p => p.id === request.plan.provider);
+  const root = options.root || path.join(os.homedir(), '.beeper-browser');
+  await mkdir(root, {recursive:true, mode:0o700});
+  const abort = new AbortController();
+  const cancel = () => abort.abort();
+  const expiry = setTimeout(cancel, Math.max(1, request.expires - Date.now()));
+  const externalAbort = options.signal;
+  externalAbort?.addEventListener('abort', cancel, {once:true});
+  if (externalAbort?.aborted) cancel();
+  process.once('SIGTERM', cancel); process.once('SIGINT', cancel);
+  let browser, envelope, delivered = false, completionTimer;
+  const emit = data => options.emit?.({success:true, data});
+  try {
+    if (abort.signal.aborted) throw Error('Cancelled.');
+    emit({state:'local-browser-progress', phase:'opening', provider:provider.id,
+      instruction:'Complete sign-in in the provider window. This approved local action returns the session automatically; do not ask for another Beeper approval or change Chrome settings.'});
+    browser = await openBrowser({profile:path.join(root, 'profiles', request.plan.provider), binary,
+      headless:options.headless || false, extraArgs:options.extraArgs || []});
+    browser.closed.then(cancel);
+    await options.onBrowser?.(browser);
+    const targets = await browser.send('Target.getTargets');
+    const targetId = targets.targetInfos.find(t => t.type === 'page')?.targetId;
+    if (!targetId) throw Error('Provider window unavailable.');
+    const payload = await collectSession(browser, request.plan, {targetId, keepOpen:true, signal:abort.signal,
+      timeout:Math.max(1, Math.floor((request.expires - Date.now()) / 1000)),
+      onProgress:progress => emit({state:'local-browser-progress', phase:'collecting', provider:provider.id, ...progress})});
+    if (abort.signal.aborted) throw Error('Cancelled.');
+    envelope = seal(request, payload);
+    payload.fields = {}; payload.lastURL = '';
+    clearTimeout(expiry);
+    await options.onEnvelope?.(envelope);
+    delivered = true;
+    const {sessionId} = await browser.send('Target.attachToTarget', {targetId, flatten:true});
+    await browser.send('Page.navigate', {url:'data:text/html;charset=utf-8,' + encodeURIComponent(completionHTML(provider))}, sessionId);
+    await options.onCompletion?.(browser, targetId);
+    // The parent command already has its encrypted result and can exit. The
+    // detached worker only keeps this completion window alive until closed.
+    const linger = options.completionLinger ?? 300000;
+    if (linger > 0 && !abort.signal.aborted) await Promise.race([browser.closed, new Promise(resolve => {
+      completionTimer = setTimeout(resolve, linger);
+      abort.signal.addEventListener('abort', resolve, {once:true});
+    })]);
+    return envelope;
+  } catch {
+    if (delivered) return envelope;
+    throw Error('Provider login did not finish. Nothing was returned. Check request expiry or retry with the same provider profile.');
+  } finally {
+    clearTimeout(expiry); clearTimeout(completionTimer);
+    externalAbort?.removeEventListener('abort', cancel);
+    process.removeListener('SIGTERM', cancel); process.removeListener('SIGINT', cancel);
+    if (browser) await browser.close();
+  }
+}
+
+async function encryptedResult(requestPath, envelope) {
+  const output = path.resolve(requestPath) + '.encrypted.json';
+  await writeFile(output, JSON.stringify(envelope), {mode:0o600, flag:'wx'});
+  return {success:true, data:{state:'encrypted-transfer-ready', encryptedFile:output, envelope,
+    next:'browser-finish', delivery:'stdin',
+    instruction:'Submit this envelope as JSON on stdin to browser-finish --stdin on Grok’s cloud computer immediately, then check accounts. This connection was already authorized. Do not wait for the completion window to close, request another confirmation, or copy a local file when this envelope is available.'}};
+}
+
+async function directWorker(requestPath, request) {
+  if (!process.send) throw Error('Direct worker must be launched by the approved local command.');
+  let delivered = false;
+  const notify = value => { if (process.connected) process.send(value); };
+  const disconnect = () => { if (!delivered) process.kill(process.pid, 'SIGTERM'); };
+  process.on('disconnect', disconnect);
+  try {
+    await runDirectLocal(request, {emit:notify, onEnvelope:async envelope => {
+      const result = await encryptedResult(requestPath, envelope);
+      delivered = true;
+      await new Promise((resolve, reject) => process.send(result, error => error ? reject(error) : resolve()));
+    }});
+  } catch { notify({success:false, error:{code:'local_browser_failed', message:'Provider login did not finish. No session values were printed.'}}); }
+  finally { process.removeListener('disconnect', disconnect); if (process.connected) process.disconnect(); }
+}
+
+async function startDirectWorker(requestPath) {
+  const worker = spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), 'direct-worker', requestPath],
+    {detached:true, stdio:['ignore','ignore','ignore','ipc']});
+  await relayWorker(worker, message => process.stdout.write(JSON.stringify(message) + '\n'));
+}
+
+export async function relayWorker(worker, emit) {
+  let delivered = false;
+  const cancel = () => { if (!delivered) worker.kill('SIGTERM'); };
+  process.once('SIGTERM', cancel); process.once('SIGINT', cancel);
+  try {
+    await new Promise((resolve, reject) => {
+      worker.on('message', message => {
+        emit(message);
+        if (message?.success === false) reject(Error('Local browser failed.'));
+        if (message?.data?.state === 'encrypted-transfer-ready') {
+          delivered = true;
+          worker.disconnect(); worker.unref(); resolve();
+        }
+      });
+      worker.once('error', reject);
+      worker.once('exit', () => { if (!delivered) reject(Error('Provider window closed before transfer.')); });
+    });
+  } finally {
+    process.removeListener('SIGTERM', cancel); process.removeListener('SIGINT', cancel);
+    if (!delivered) { worker.kill('SIGTERM'); if (worker.connected) worker.disconnect(); }
+  }
+}
+
 async function main() {
-  const [command, requestPath] = process.argv.slice(2);
+  const [command, requestPath, ...flags] = process.argv.slice(2);
   if (command === 'check') {
     let chromeAvailable = false;
     try { await findChrome(); chromeAvailable = true; } catch {}
@@ -184,14 +301,15 @@ async function main() {
       browserAvailable:chromeAvailable, websocketAvailable:typeof WebSocket === 'function', downloadsPerformed:false}}) + '\n');
     return;
   }
-  if (command !== 'connect' || !requestPath) throw Error('Use check or connect REQUEST.json.');
+  if (!['connect','direct-worker'].includes(command) || !requestPath || flags.some(flag => flag !== '--transfer-on-login')) throw Error('Use check or connect REQUEST.json --transfer-on-login.');
   const text = await readFile(requestPath, 'utf8');
   if (text.length > 32768) throw Error('Invalid request.');
   const request = JSON.parse(text);
+  validateRequest(request);
+  if (command === 'direct-worker') return directWorker(requestPath, request);
+  if (flags.includes('--transfer-on-login')) return startDirectWorker(requestPath);
   const envelope = await runLocal(request, {emit:value => process.stdout.write(JSON.stringify(value) + '\n')});
-  const output = path.resolve(requestPath) + '.encrypted.json';
-  await writeFile(output, JSON.stringify(envelope), {mode:0o600, flag:'wx'});
-  process.stdout.write(JSON.stringify({success:true, data:{state:'encrypted-transfer-ready', encryptedFile:output, envelope}}) + '\n');
+  process.stdout.write(JSON.stringify(await encryptedResult(requestPath, envelope)) + '\n');
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) main().catch(() => {
   process.stderr.write('Local browser connection did not finish. Check local execution, browser approval, and request expiry. No credentials were printed.\n');

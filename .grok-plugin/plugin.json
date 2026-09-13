@@ -1,6 +1,6 @@
 {
   "name": "beeper",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Set up Beeper Server with Grok Bot, sign in to Beeper, connect chat networks, and work with your messages from chat.",
   "author": {
     "name": "Suat Sülün",

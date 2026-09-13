@@ -36,11 +36,15 @@ def prepare_transfer(runtime, plan, snapshot):
     return {"state": "local-browser-required", "provider": plan["provider"], "expires": request["expires"],
             "requiredFields": [field["id"] for field in plan["fields"] if field["required"]],
             "optionalFields": [field["id"] for field in plan["fields"] if not field["required"]],
-            "localPackage": str(package), "approval": "Required on the PC for every transfer",
-            "instruction": "Run the bundled local_browser.mjs through Grok Desktop's approved LOCAL execution, using existing Node or Grok's embedded Node. Copy only this public package to the PC. The user chooses an existing Chrome session or a separate local login window, then approves this transfer. Return only the encrypted envelope via browser-finish --file. Never substitute a cloud browser automatically."}
+            "localPackage": str(package), "approval": "Fresh local connect-and-transfer approval is required for this request",
+            "approvalScope": {"provider": plan["provider"], "destination": request["destination"],
+                              "requestID": request["id"], "expires": request["expires"]},
+            "instruction": "Obtain the user's fresh local approval for this exact action: open the named provider and return its encrypted session to Beeper Server on Grok. Never approve for the user or rely on a saved grant. Run the bundled local_browser.mjs connect REQUEST.json --transfer-on-login using existing Node or Grok's embedded Node. It opens the provider directly in its own profile; no Chrome settings or Beeper approval page are needed. Await the same job. Submit its encrypted-transfer-ready envelope immediately as JSON on stdin to browser-finish --stdin, without another confirmation or local file-copy action. The completion window can remain open. Use --file only when the tool cannot return the envelope. Never substitute a cloud browser automatically."}
 
 
-def finish_transfer(runtime, envelope_file):
+def finish_transfer(runtime, envelope_file=None, *, envelope_data=None):
+    if (envelope_file is None) == (envelope_data is None):
+        raise Failure("Provide one encrypted envelope source.", "usage")
     with runtime.lock():
         runtime.writable()
         state_file = runtime.root / "browser-transfer.json"
@@ -56,8 +60,13 @@ def finish_transfer(runtime, envelope_file):
         if list(snapshot) != state["snapshot"] or session.get("status") in TERMINAL:
             state_file.unlink(missing_ok=True)
             raise Failure("The pending login changed. This transfer cannot be submitted.", "stale_input")
-        with Path(envelope_file).open("rb") as stream:
-            data = stream.read(200001)
+        if envelope_data is None:
+            with Path(envelope_file).open("rb") as stream:
+                data = stream.read(200001)
+        else:
+            data = envelope_data
+            if not isinstance(data, bytes):
+                raise Failure("Expected an encrypted JSON envelope on stdin.", "invalid_transfer")
         if len(data) > 200000:
             raise Failure("Encrypted transfer exceeded the size limit.", "invalid_transfer")
         try:

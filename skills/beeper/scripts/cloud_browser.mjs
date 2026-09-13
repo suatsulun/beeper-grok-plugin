@@ -16,6 +16,7 @@ export async function openBrowser({profile, binary, headless = false, extraArgs 
   if (!binary) throw Error('Chrome is unavailable.');
   await mkdir(profile, {recursive:true, mode:0o700});
   const child = spawn(binary, ['--user-data-dir=' + profile, '--remote-debugging-pipe', '--no-first-run', '--no-default-browser-check', ...(headless ? ['--headless=new'] : []), ...extraArgs, 'about:blank'], {stdio:['ignore','ignore','ignore','pipe','pipe']});
+  const closed = new Promise(resolve => { child.once('exit', resolve); child.once('error', resolve); });
   let sequence = 0, buffer = '';
   const pending = new Map(), listeners = new Set();
   child.on('error', () => { for (const call of pending.values()) call.reject(Error('Chrome failed.')); });
@@ -48,7 +49,7 @@ export async function openBrowser({profile, binary, headless = false, extraArgs 
     if (child.exitCode === null) await Promise.race([new Promise(resolve => child.once('exit', resolve)), new Promise(resolve => setTimeout(resolve, 3000))]);
     if (child.exitCode === null) child.kill('SIGKILL');
   };
-  return {send, listeners, close};
+  return {send, listeners, close, closed};
 }
 
 export async function attachBrowser(endpoint) {
@@ -108,10 +109,11 @@ export async function connectBrowserWebSocket(endpoint, {connectTimeout = 5000, 
   return {send, listeners, close:async () => { signal?.removeEventListener('abort', abort); closed(); socket.close(); }};
 }
 
-export async function collectSession(browser, plan, {timeout = 600, providers:registry = providers, navigateURL, signal, onReady, onProgress} = {}) {
+export async function collectSession(browser, plan, {timeout = 600, providers:registry = providers, navigateURL, signal, onReady, onProgress, targetId:ownedTarget, keepOpen = false} = {}) {
   const provider = validatePlan(plan, registry);
   if (signal?.aborted) throw Error('Browser login cancelled.');
-  const {targetId} = await browser.send('Target.createTarget', {url:'about:blank'});
+  const targetId = ownedTarget || (await browser.send('Target.createTarget', {url:'about:blank'})).targetId;
+  let collected = false;
   const cancel = () => { void browser.send('Target.closeTarget', {targetId}).catch(() => {}); };
   signal?.addEventListener('abort', cancel, {once:true});
   try {
@@ -146,7 +148,7 @@ export async function collectSession(browser, plan, {timeout = 600, providers:re
       const progress = (fields, finalPageReady) => {
         const status = {missingRequiredFields:plan.fields.filter(f => f.required && !fields[f.id]).map(f => f.id), waitingForFinalPage:!finalPageReady};
         const key = JSON.stringify(status);
-        if (!approved && key !== lastProgress) { lastProgress = key; onProgress?.(status); }
+        if ((!onReady || !approved) && key !== lastProgress) { lastProgress = key; onProgress?.(status); }
       };
       while (Date.now() < deadline) {
         if (signal?.aborted) throw Error('Browser login cancelled.');
@@ -183,6 +185,7 @@ export async function collectSession(browser, plan, {timeout = 600, providers:re
               finally { cleanup(); }
               continue;
             }
+            collected = true;
             return {fields, lastURL};
           }
         } else progress({}, false);
@@ -192,8 +195,8 @@ export async function collectSession(browser, plan, {timeout = 600, providers:re
     } finally { browser.listeners.delete(observe); }
   } finally {
     signal?.removeEventListener('abort', cancel);
-    // Only the tab we created belongs to this operation, including on timeout.
-    await browser.send('Target.closeTarget', {targetId}).catch(() => {});
+    // A supplied target must also belong to the caller's owned browser.
+    if (!keepOpen || !collected) await browser.send('Target.closeTarget', {targetId}).catch(() => {});
   }
 }
 

@@ -59,6 +59,69 @@ class LocalTransferTests(unittest.TestCase):
         self.assertNotIn(SECRET, result.stdout + result.stderr)
         return result.returncode, json.loads(result.stdout)
 
+    def finish_stdin(self, data):
+        result = subprocess.run([sys.executable, str(REPO / "skills/beeper/scripts/beeper.py"), "browser-finish", "--stdin"],
+                                input=data, env={**os.environ, "BEEPER_PLUGIN_HOME":str(self.root)}, capture_output=True, timeout=10)
+        self.assertNotIn(SECRET.encode(), result.stdout + result.stderr)
+        return result.returncode, json.loads(result.stdout)
+
+    def test_stdin_finishes_without_copying_a_file_and_rejects_replay(self):
+        envelope = self.encrypted().read_bytes()
+        code, result = self.finish_stdin(envelope)
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["data"]["status"], "complete")
+        self.assertEqual(self.submissions()[0]["fields"], {"sessionid":SECRET})
+        code, result = self.finish_stdin(envelope)
+        self.assertEqual((code, result["error"]["code"]), (1, "stale_input"))
+        self.assertEqual(len(self.submissions()), 1)
+
+    def test_stdin_invalid_or_oversized_data_never_submits_or_consumes_key(self):
+        for data in (b"", b"{}", b"not json", b"x" * 200001):
+            with self.subTest(length=len(data)):
+                code, result = self.finish_stdin(data)
+                self.assertEqual((code, result["error"]["code"]), (1, "invalid_transfer"))
+                self.assertEqual(self.submissions(), [])
+                self.assertIn("privateKey", read_json(self.state_file))
+
+    def test_stdin_expired_request_never_submits(self):
+        envelope = self.encrypted().read_bytes()
+        self.state["request"]["expires"] = int(time.time() * 1000) - 1
+        write_json(self.state_file, self.state)
+        code, result = self.finish_stdin(envelope)
+        self.assertEqual((code, result["error"]["code"]), (1, "browser_timeout"))
+        self.assertEqual(self.submissions(), [])
+
+    def test_envelope_input_requires_exactly_one_source(self):
+        with self.assertRaises(Failure): finish_transfer(self.runtime)
+        with self.assertRaises(Failure): finish_transfer(self.runtime, "unused", envelope_data=b"{}")
+        self.assertEqual(self.submissions(), [])
+
+    def test_local_worker_returns_before_completion_and_cancels_on_interruption(self):
+        for mode in ("complete", "cancel", "exit"):
+            with self.subTest(mode=mode):
+                result = subprocess.run(["node", str(REPO / "tests/direct-worker-smoke.mjs"), mode, str(self.root)],
+                                        capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('"passed":true', result.stdout)
+
+    @unittest.skipUnless(os.environ.get("BEEPER_BROWSER_TEST") == "1", "optional direct provider window test")
+    def test_direct_window_auto_handoff_completion_cancel_and_expiry(self):
+        self.api.network["currentStep"]["fields"] = [{"id": name, "type":"cookie"} for name in
+            ("sessionid", "csrftoken", "ds_user_id", "rur", "shbid", "shbts", "mid", "ig_did")]
+        with self.runtime.lock(): prepare_transfer(self.runtime, *prepare(self.runtime))
+        self.state = read_json(self.state_file)
+        result = subprocess.run(["node", str(REPO / "tests/direct-browser-smoke.mjs")],
+                                input=json.dumps({"root":str(self.root), "binary":os.environ.get("BEEPER_TEST_CHROME", "/usr/bin/google-chrome"),
+                                                  "request":self.state["request"]}),
+                                text=True, capture_output=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn(SECRET, result.stdout + result.stderr)
+        data = json.loads(result.stdout)
+        self.assertTrue(data["passed"])
+        code, response = self.finish_stdin(json.dumps(data["envelope"]).encode())
+        self.assertEqual(code, 0, response)
+        self.assertEqual(self.submissions()[0]["fields"], {"sessionid":SECRET, "csrftoken":"synthetic-csrf", "ds_user_id":"123"})
+
     def test_cli_finish_reports_success_and_specific_replay_error(self):
         envelope = self.encrypted()
         code, result = self.finish_command(envelope)

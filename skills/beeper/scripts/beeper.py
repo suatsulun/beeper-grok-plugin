@@ -485,7 +485,9 @@ def main():
     commands.add_parser("browser-plan", help="Show the selected provider, origins, and local browser requirements")
     commands.add_parser("browser-cancel", help="Invalidate a local transfer while preserving the network login")
     p = commands.add_parser("browser-finish", help="Deliver a one-use encrypted local browser transfer")
-    p.add_argument("--file", required=True, help="Encrypted envelope returned by the local helper")
+    envelope_source = p.add_mutually_exclusive_group(required=True)
+    envelope_source.add_argument("--file", help="Encrypted envelope file returned by the local helper")
+    envelope_source.add_argument("--stdin", action="store_true", help="Read the returned encrypted envelope JSON directly from stdin")
     p = commands.add_parser("login")
     p.add_argument("--email", required=True)
     p = commands.add_parser("verify-confirm")
@@ -521,7 +523,13 @@ def main():
             return
         if args.command == "browser-finish":
             from local_transfer import finish_transfer
-            emit({"success": True, "data": redact(finish_transfer(runtime, args.file))})
+            if args.stdin:
+                if sys.stdin.isatty():
+                    raise Failure("Pipe the encrypted envelope JSON to browser-finish --stdin.", "usage")
+                result = finish_transfer(runtime, envelope_data=sys.stdin.buffer.read(200001))
+            else:
+                result = finish_transfer(runtime, args.file)
+            emit({"success": True, "data": redact(result)})
             return
         if args.command == "browser-cancel":
             from local_transfer import cancel_transfer
