@@ -13,9 +13,7 @@ import struct
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import zlib
 
 TARGET = "grok-bot"
@@ -65,9 +63,13 @@ def segment(value):
     return urllib.parse.quote(value, safe="")
 
 
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+def api_opener():
+    # CLI-only reads do not need Python's HTTP/TLS/email import tree.
+    import urllib.request
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
 
 class Runtime:
@@ -79,6 +81,7 @@ class Runtime:
         self.target_file = self.config / "targets" / f"{TARGET}.json"
         self.state_file = self.root / "onboarding.json"
         self.binary = self.root / "bin/beeper"
+        self._opener = None
 
     @contextmanager
     def lock(self):
@@ -91,7 +94,7 @@ class Runtime:
             yield
 
     def writable(self):
-        if os.environ.get("BEEPER_READONLY", "").lower() in ("1", "true", "yes"):
+        if os.environ.get("BEEPER_READONLY", "").lower() in ("1", "true", "yes", "on"):
             raise Failure("BEEPER_READONLY prevents this operation.", "read_only")
 
     def state(self):
@@ -124,13 +127,15 @@ class Runtime:
     def env(self):
         env = {k: v for k, v in os.environ.items() if not k.startswith("BEEPER_") or k == "BEEPER_READONLY"}
         env.update({"BEEPER_CLI_CONFIG_DIR": str(self.config), "BEEPER_TARGET": TARGET,
+                    "BEEPER_SKIP_NEW_VERSION_CHECK": "true",
                     "BEEPER_CLI_BINARY_CACHE_DIR": str(self.root / "cache/binary"),
                     "XDG_CACHE_HOME": str(self.root / "cache"), "TMPDIR": str(self.root / "tmp")})
         for p in (self.root / "cache/binary", self.root / "tmp"):
             p.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if self.target_file.exists() and self.token():
+        token = self.token() if self.target_file.exists() else None
+        if token:
             # CLI 0.6.2 diagnostics can discard target auth when resolving baseURL.
-            env["BEEPER_ACCESS_TOKEN"] = self.token()
+            env["BEEPER_ACCESS_TOKEN"] = token
         return env
 
     def cli(self, arguments, timeout=90):
@@ -141,27 +146,49 @@ class Runtime:
                                     capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             raise Failure("Beeper timed out. Inspect status before retrying a write.", "timeout")
+        return self.cli_result(arguments, result)
+
+    def cli_result(self, arguments, result):
         if result.returncode and "--webview" in arguments and "Bun.WebView is not available" in result.stdout + result.stderr:
             raise Failure("This Beeper CLI build cannot open the provider login browser because Bun.WebView is unavailable. Check accounts before retrying; do not substitute a password or cookie form.", "browser_unavailable")
-        if "--help" in arguments and result.returncode == 0:
+        if any(arg in ("--help", "-h") for arg in arguments) and result.returncode == 0:
             return {"help": result.stdout}
+        if "--version" in arguments and result.returncode == 0:
+            return {"version": result.stdout.strip()}
+        if "--ids" in arguments and result.returncode == 0:
+            # One numeric message ID is valid JSON too; keep it an ID string.
+            return {"ids": result.stdout.splitlines()}
         try:
             output = json.loads(result.stdout)
         except ValueError:
-            raise Failure(f"Beeper returned a non-JSON result (exit {result.returncode}); raw output was withheld.", "cli_error")
+            try:
+                output = json.loads(result.stderr) if result.returncode else None
+            except ValueError:
+                output = None
+            if not isinstance(output, dict):
+                raise Failure(f"Beeper returned a non-JSON result (exit {result.returncode}); raw output was withheld.", "cli_error")
+        if not isinstance(output, dict):
+            raise Failure("Beeper returned an invalid result envelope; raw output was withheld.", "cli_error")
         if result.returncode or output.get("success") is False:
             # Raw error text may contain credentials, cookies, or submitted fields.
             error = output.get("error") or {}
             code = error.get("code") if isinstance(error, dict) else None
+            code = code if isinstance(code, str) and re.fullmatch(r"[a-z_]{1,40}", code) else "unknown"
             raise Failure(f"Beeper command failed (exit {result.returncode}, code {code or 'unknown'}). Check status and the command help.", "cli_error")
         return output.get("data", output)
 
+    def cli_batch(self, requests, timeout=90):
+        from read_batch import execute
+        return execute(self, requests, timeout)
+
     def api(self, method, path, body=None, public=False, timeout=30):
+        import urllib.error
+        import urllib.request
         if method != "GET":
             self.writable()
         target = self.target()
         headers = {"Accept": "application/json"}
-        token = self.token()
+        token = target.get("auth", {}).get("accessToken")
         if not public and not token:
             raise Failure("Sign in to Beeper first.", "needs_login")
         if not public:
@@ -171,9 +198,10 @@ class Runtime:
             payload = json.dumps(body).encode()
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(target["baseURL"].rstrip("/") + path, data=payload, headers=headers, method=method)
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+        if self._opener is None:
+            self._opener = api_opener()
         try:
-            with opener.open(request, timeout=timeout) as response:
+            with self._opener.open(request, timeout=timeout) as response:
                 data = response.read()
             return json.loads(data) if data else {}
         except urllib.error.HTTPError as exc:
@@ -509,6 +537,7 @@ def main():
     p.add_argument("kind", choices=("email", "register", "recovery", "network"))
     p = commands.add_parser("cli", help="Messaging commands on the plugin's Server target")
     p.add_argument("arguments", nargs=argparse.REMAINDER)
+    commands.add_parser("batch", help="Read a JSON array of independent CLI read requests from stdin through standard RPC")
     args = parser.parse_args()
     runtime = Runtime()
     try:
@@ -589,6 +618,15 @@ def main():
                 runtime.update(network=None)
                 runtime.clear_qr()
                 result = {"cancelled": True}
+            elif c == "batch":
+                try:
+                    data = sys.stdin.buffer.read(262145)
+                    if len(data) > 262144:
+                        raise ValueError()
+                    requests = json.loads(data)
+                except (ValueError, UnicodeError):
+                    raise Failure("Expected a JSON read batch of at most 256 KiB on stdin.", "usage") from None
+                result = runtime.cli_batch(requests)
             else:
                 arguments = args.arguments
                 if arguments[:1] == ["--"]:

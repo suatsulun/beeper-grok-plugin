@@ -16,7 +16,7 @@ QR_SHA256 = "16e64e0716c14960108e85d853062c9e8bba5ca8252c0b4d0231b9df4060ff4f"
 
 
 def download(url, checksum):
-    request = urllib.request.Request(url, headers={"User-Agent": "beeper-grok-plugin/0.6.1"})
+    request = urllib.request.Request(url, headers={"User-Agent": "beeper-grok-plugin/0.6.4"})
     with urllib.request.urlopen(request, timeout=120) as response:
         content = response.read(200 * 1024 * 1024 + 1)
     if len(content) > 200 * 1024 * 1024:
@@ -31,7 +31,8 @@ def install_tools(root):
     if platform.system() != "Linux" or arch not in CLI_SHA256:
         raise RuntimeError("Automatic installation supports Linux x86_64 and aarch64.")
     binary = root / "bin" / "beeper"
-    if not binary.exists():
+    installed_cli = not binary.exists()
+    if installed_cli:
         release_arch = "x64" if arch == "x86_64" else "arm64"
         name = f"beeper-cli-{CLI_VERSION}-linux-{release_arch}.tar.gz"
         content = download(f"https://github.com/beeper/cli/releases/download/v{CLI_VERSION}/{name}", CLI_SHA256[arch])
@@ -58,4 +59,7 @@ def install_tools(root):
                     continue
                 dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 dest.write_bytes(archive.read(name))
-    return {"cliVersion": CLI_VERSION, "qrVersion": "8.2"}
+    # An existing binary may be a user-selected build. Do not misreport the pin
+    # as its installed version, and never replace it during a helper bootstrap.
+    return {"cliVersion": CLI_VERSION if installed_cli else None,
+            "cliVersionPin": CLI_VERSION, "cliPreserved": not installed_cli, "qrVersion": "8.2"}

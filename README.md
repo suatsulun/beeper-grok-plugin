@@ -4,77 +4,196 @@
 
 # Beeper for Grok Bot
 
-Ask Grok to install Beeper Server, sign in to Beeper, connect your chat networks, and work with your messages. The plugin includes a `/beeper` skill and helpers that run the setup workflow on Grok Bot's cloud computer.
+Connect your chat networks to Beeper and work with your messages through Grok. This plugin guides setup, account verification, network login, reading, searching, drafting, and sending through Beeper Server.
+
+**Version 0.6.4 uses the official Beeper CLI. No modified CLI is required.** Server runs on Grok Bot's cloud computer. Supported website logins open in a separate Chrome window on your PC after your approval, then return the session to Server automatically through an encrypted handoff.
 
 ```text
 Set up Beeper and connect my WhatsApp account.
+Connect Instagram to Beeper.
 Continue my Beeper setup.
-Connect Telegram to Beeper.
-Summarize my unread Beeper chats.
+Summarize my unread WhatsApp chats.
+Find Alex's message about Friday's meeting.
 Draft a reply to Alex's latest message.
 ```
 
-Grok installs Server, guides Beeper sign-in and device verification, and connects your selected networks. **No companion extension, Node upgrade, or manual dependency installation is required on the normal Grok Bot image.** The plugin uses the Python, Node, and Chrome already there. Grok automatically downloads the Beeper CLI, Server, and QR support when you ask it to set up Beeper.
+This repository contains the Server-based plugin. The earlier Desktop MCP implementation remains in Git history. Installing this plugin does not require Beeper Desktop or a local MCP connection.
 
-**Website login uses your normal Chrome profile on your PC**, including its sign-ins, extensions and saved-password tools. Enable Chrome’s connection setting and approve its connection prompt when requested. After your fresh Grok approval for the provider connection and encrypted return, the helper opens a new provider window in that shared profile. Sign in if needed; the helper returns the encrypted session automatically and shows **You can close this window now**. No Beeper page or separate transfer click is needed. Grok finishes the connection and checks the account.
+## How it works
 
-Chrome 144+ requires you to enable its setting at `chrome://inspect/#remote-debugging` and approve its prompt; the helper never does either for you. Use the Chrome profile you want to connect. Chrome chooses the shared profile, and an already-signed-in provider may finish immediately. If that connection is unavailable or denied, the helper stops instead of opening an empty profile. A separate profile is available only when requested; it does not inherit your usual extensions or saved passwords. No extension, cookie-database reader, or extra application is needed. Grok’s local actions still require fresh approval, and provider MFA/CAPTCHA remains yours to complete. A cloud browser is used only if you explicitly choose it. QR/device-code flows keep their native steps. Browser login must be offered by the live Server bridge. See [browser login and compatibility](skills/beeper/references/browser-login.md).
+| Component | Location | Role |
+| --- | --- | --- |
+| Grok skill and Python helper | Grok's cloud computer | Guide setup, protect credentials, run messaging commands |
+| Official Beeper CLI and Server | Grok's cloud computer | Maintain accounts, network connections, and message access |
+| Bundled browser helper | Your PC, through Grok's approved local tools | Open the provider, collect the requested session fields, return encrypted data |
+| Separate provider profile | Your PC | Keep that provider's sign-in separate from your normal browser data |
 
-Version 0.6.3 makes the approved normal Chrome profile the default while retaining v0.6.2’s automatic handoff. The local command finishes once it returns the ciphertext, even if you leave the completion window open. Grok feeds that result directly to `browser-finish --stdin`; no separate local file-copy action is needed when its tool returns the envelope.
+The plugin uses available Python, Node, and Chrome/Chromium runtimes. It does not ask you to manually install an extension, browser, or runtime. Initial Beeper setup automatically downloads the CLI, Server, and QR support. If the required runtimes or Grok local tools are unavailable, Grok reports the limitation.
 
-**Instagram does not need every optional cookie to reach approval.** Its upstream bridge requires `sessionid`, `csrftoken`, and `ds_user_id`; `shbid`, `shbts`, `rur`, `mid`, and `ig_did` are optional. Version 0.6.1 recognizes those optional cookies when the Server omits requirement flags, collects them if present, and does not ask you to browse more or sign in again just to create them. Explicit bridge requirements still take precedence. See the [cookie requirements guide](skills/beeper/references/browser-login.md#instagram-cookie-requirements) for the source and limitations.
+## Install
 
-Version 0.6.1 also handles X's optional browser inputs, labels optional native form fields, and shows clearer progress before and after approval. Grok receives required-field diagnostics without session values, and CLI errors retain their specific cause. The [login audit](skills/beeper/references/login-audit.md) covers all six provider adapters, native methods, and recovery without unnecessary sign-ins. Slack's inspected token flow needs extraction this helper does not support; advanced X challenges can also require unsupported generation. Neither limitation is fixed by skipping required fields.
+### Grok Bot
 
-## Install the plugin
+Install and enable the plugin through the plugin distribution supported by your Grok Bot account. This source repository is not a claim of public marketplace availability. A local Grok CLI installation does not install the plugin on Grok Bot's cloud computer.
 
-For local development in Grok CLI:
+For a source handoff, give Grok the plugin-only ZIP and the accompanying `SEND-TO-GROK.txt` produced by [the packaging command](#package-for-grok). Grok can extract the files on its cloud computer and follow `skills/beeper/SKILL.md`. The alternative JSON bundle contains the same files and checksums; it is a source-transfer format, not an official plugin-import format. See [Grok Bot's skill documentation](https://docs.x.ai/grok-bot/skills-routines-and-automations) for the account's supported installation route.
+
+Once the skill is available, ask **“Set up Beeper and connect my WhatsApp account.”** Plugin installation itself only adds source files; it does not start account login or authorize sending messages.
+
+### Grok CLI / local development
+
+With Grok CLI already installed:
 
 ```sh
-grok plugin install /absolute/path/to/beeper-grok-plugin --trust
+grok plugin install suatsulun/beeper-grok-plugin
 grok plugin enable beeper
 ```
 
-Restart Grok, open `/skills`, or invoke `/beeper`. The skill is also discoverable from natural-language Beeper requests. Installing the plugin only installs its files; Server installation happens when you ask Grok to set up Beeper.
-
-For Grok Bot, install and enable the packaged skill through the plugin distribution available to your account. Private installed skills can be enabled under **Settings → Plugins → Yours**. The public marketplace submission remains a separate step; installing into your local CLI does not install into Grok Bot's cloud computer. See [Grok Bot skills](https://docs.x.ai/grok-bot/skills-routines-and-automations).
-
-## Runtime and downloads
-
-The helper runs on Linux x86_64/aarch64 with Python 3.10+, Node, and Chrome/Chromium. **Grok's Node 20.19.2 works**; version 0.4.0's Node 22+ requirement was unnecessary. On the PC, the helper uses an existing compatible Node or the Node runtime inside the already installed Grok Desktop app. Linux Grok 0.44.0's embedded Node 24.15.0 was verified. There are no npm dependencies, runtime installers, browser-extension packages, or public relays. If a custom Bot image lacks a required runtime, the plugin reports the environment limitation instead of asking users to install components.
+Or install a local checkout:
 
 ```sh
-python3 skills/beeper/scripts/beeper.py browser-check
+grok plugin install /absolute/path/to/beeper-grok-plugin
+grok plugin enable beeper
 ```
 
-This checks the existing runtime and browser availability without downloading software, accessing accounts, or starting Server. This cloud check does not check the PC. The local helper has its own `check` command, run on the selected desktop through Grok.
+Review Grok's plugin trust prompt, then invoke `/beeper` in a session where the skill is loaded. Running setup from a local CLI runs the helper on that computer; the cloud/PC split described here applies to Grok Bot.
 
-Automatic setup downloads Beeper CLI 0.6.2 and qrcode 8.2 from their official releases with pinned SHA-256 checksums. The CLI downloads Server through Beeper's installer. This is automatic setup, **not an offline bundle**. Beeper account code forms still use takeover. Network website sign-in occurs on the PC, where its clipboard is available. Separate local Chrome profiles do not automatically inherit normal browser extensions/autofill. No cross-computer clipboard sync is supplied.
+## First setup
 
-## Authentication and data
+1. **Install and start Server.** Grok runs the bundled bootstrap on its cloud computer and creates the isolated `grok-bot` target.
+2. **Sign in to Beeper.** Enter your email code in the private form through Grok's browser takeover. New account creation requires your chosen username and acceptance of Beeper's terms.
+3. **Verify the device.** Compare the displayed emojis with a trusted Beeper device, or enter your existing recovery key in the private form. Grok waits for your comparison; it does not reset keys.
+4. **Connect your selected network.** Grok discovers the live bridge's supported methods. QR and device-code methods keep their native steps; website login uses the local flow below.
+5. **Check the connection.** Grok checks the selected account and a scoped chat/message read. A successful login is not permission to send a test message.
 
-Data lives in `/workspace/.beeper-grok` on Grok Bot, or `~/.local/share/beeper-grok-plugin` elsewhere. `BEEPER_PLUGIN_HOME` selects another persistent location. Credentials and pending login state stay outside the plugin files with private filesystem permissions. All Bots on one Grok account share its cloud computer. See [Grok Bot's computer model](https://docs.x.ai/grok-bot/computer-and-apps).
+Passwords, codes, recovery keys, and cookie values do not belong in chat. Detailed setup and recovery commands are in [the setup guide](skills/beeper/references/setup.md).
 
-The browser helper collects only fields requested by the selected provider: required fields and any optional fields present, from named cookies, local-storage entries, and request headers in its own provider tab. It never runs bridge-supplied JavaScript or reads the browser's cookie database or password vault. Chrome grants a browser debugging connection; the helper limits its collection to that provider. Existing-session reuse still depends on the provider accepting that session; MFA or fresh sign-in may be required.
+## Website login on your PC
 
-The default direct window connects through Chrome’s user-enabled `DevToolsActivePort` metadata. It never scans ports or changes Chrome permissions. It creates only its provider window, replaces that page with a completion screen after returning ciphertext, then closes that helper-created target and disconnects when the user closes it or after at most five minutes. Your normal Chrome and unrelated tabs stay open. If permission is revoked or the browser disconnects, cleanup cannot close the target through that lost connection; the helper stops without reconnecting. The optional separate profile under `~/.beeper-browser/profiles` uses private debugging pipes and preserves its own provider sign-in. Neither mode installs a persistent service.
+For supported cookie-based bridge flows:
 
-Each ten-minute transfer uses an ephemeral X25519 key exchange, HKDF-SHA-256, and AES-256-GCM. The receiver's private key stays in the cloud data directory; Grok's normal local-tool transport carries ciphertext. Every transfer needs a fresh local approval identifying its provider and destination; a stored profile, earlier grant or command-line flag is not authorization. Requests are bound to the pending Beeper step and consumed before submission to prevent replay after ambiguous failures. No public receiver or relay is needed. Plaintext session values stay out of chat and command arguments. Messages requested by the user enter the conversation; sending delivers content to the selected recipient.
+1. Grok prepares the login request and asks for **fresh local approval to open the named provider and return its encrypted session to Beeper Server on Grok**.
+2. After you approve, the provider opens directly in a separate local Chrome window. No Chrome setting changes or extra Beeper review page are required for this default flow.
+3. You log in and complete any provider MFA or CAPTCHA. The profile may already have its own valid sign-in from an earlier connection.
+4. The helper collects the required session fields and any supported optional fields present, encrypts them, and returns the result automatically.
+5. The browser shows **“You can close this window now.”** Grok immediately submits the result and checks the account; you do not need to say “done” or close the window first.
 
-The plugin uses the [official Beeper CLI and API](https://github.com/beeper/cli). It includes no Beeper Desktop installer or Desktop MCP connection. The API stays at `http://127.0.0.1:<port>`. Tool downloads use GitHub releases and the Python package CDN; Server downloads use `api.beeper-staging.com` and Beeper's release CDN. Server then connects to Beeper's production services and the selected networks. The plugin adds no telemetry; Beeper software follows its [privacy policy](https://www.beeper.com/privacy).
+This profile contains none of your normal Chrome cookies, extensions, or saved passwords. It can retain its own provider sign-in under `~/.beeper-browser/profiles`. Your local clipboard is available for the provider website; this does not add clipboard synchronization to Grok's cloud takeover forms.
 
-## Validation status
+The completion screen confirms that the local handoff is ready. Grok's account check confirms whether Server accepted it. The completion worker exits when the window closes or after at most five minutes.
 
-Automated checks cover onboarding, scoped collection, both local browser choices, real Chromium approval forms, denial, encryption, expiry, stale requests, and replay protection with synthetic credentials. The local helper also runs using the installed Grok Desktop runtime without downloads. Actual Grok machine-targeted execution, Chrome's existing-profile permission prompt, and real provider accounts still need user acceptance testing. Linux is tested; macOS/Windows paths and UI remain unverified. See the [test procedure](tests/README.md).
+Every transfer needs new approval, even with a saved sign-in. Grok must never approve its own action or switch local execution to always allowed. There is no automatic cloud-browser fallback. Advanced browser alternatives and their additional requirements are documented in [browser login](skills/beeper/references/browser-login.md); they are not prerequisites for the default separate-window flow.
 
-Beeper's installer currently downloads a nightly Server artifact. Device-verification and headless chat-availability limits are documented in the [setup guide](skills/beeper/references/setup.md#known-upstream-limits). Local checks do not establish marketplace approval or support for every network.
+### Network compatibility
 
-## Support
+Network names, bridge IDs, login methods, and required fields come from your running Server. A provider adapter does not guarantee that every bridge or account supports website login.
 
-- [Beeper CLI](https://github.com/beeper/cli)
-- [Setup and troubleshooting](skills/beeper/references/setup.md)
-- [Report a plugin issue](https://github.com/suatsulun/beeper-grok-plugin/issues)
+- WhatsApp-style QR flows use the provider's native linked-device procedure.
+- Instagram cookie login supports the three core cookies and collects optional extras only when present, unless the live bridge explicitly requires otherwise.
+- The bundled registry covers Instagram, X/Twitter, Facebook/Messenger, LinkedIn, Discord, and Slack domain adapters. Some live flows still require unsupported extraction or challenge generation, including the inspected Slack token flow and some X challenges.
+- Beeper email/recovery and native phone/code inputs use private forms on Grok's cloud computer.
 
-## License
+See [the provider audit](skills/beeper/references/login-audit.md) for exact scope. Unsupported flows produce an explanation instead of inventing credentials or silently switching browsers.
 
-Plugin files: [MIT](LICENSE). Beeper CLI and qrcode retain their upstream licenses and terms when downloaded. The [Beeper icon](https://www.beeper.com/wp-content/uploads/2026/05/beeper-favicon.png) comes from Beeper's website; Beeper branding belongs to its owners and is not covered by the plugin's MIT license.
+## Messaging and performance
+
+Ask for messages in natural language. Grok should use the already established account/chat IDs and perform routine reads directly, without repeating setup, status, version, and help checks each time. It resolves ambiguous recipients before sending. Drafts stay in the conversation until you ask to send them.
+
+The helper preserves ordinary CLI messaging commands and adds bounded read-only batches for independent reads. Batching reduces separate Grok tool/helper invocations; the standard CLI still incurs its own subprocess startup cost. This plugin does not claim to eliminate Grok reasoning/tool latency or provider sync delays.
+
+For manual development, set the helper path:
+
+```sh
+HELPER="$PWD/skills/beeper/scripts/beeper.py"
+python3 "$HELPER" cli -- chats list --unread --limit 20 --read-only
+python3 "$HELPER" cli -- messages list --chat 'CHAT_ID' --limit 20 --read-only
+```
+
+Replace `CHAT_ID` with a returned chat ID. For several already known chats:
+
+```sh
+python3 "$HELPER" batch <<'JSON'
+[
+  {"id":"first","args":["messages","list","--chat","FIRST_CHAT_ID","--limit","20"]},
+  {"id":"second","args":["messages","list","--chat","SECOND_CHAT_ID","--limit","20"]}
+]
+JSON
+```
+
+Batches accept 1–32 requests and at most 256 KiB of JSON input. Requests run sequentially through official CLI 0.6.2's RPC protocol, with fixed target and read-only settings. Each result reports its own success/error; `allSucceeded` reports aggregate success. Writes and endpoint/target overrides are rejected before execution. No requests are automatically retried after a timeout.
+
+For search, pagination, sending, attachment commands, and output formats, see [the messaging guide](skills/beeper/references/messaging.md). CLI help remains available through `python3 "$HELPER" cli -- messages list --help`.
+
+## Update an existing installation
+
+Replace only the plugin source and point Grok at its new `skills/beeper/SKILL.md`. Preserve the existing `BEEPER_PLUGIN_HOME` and `grok-bot` target. Updating plugin source does not require replacing the CLI, reinstalling or restarting Server, reconnecting healthy accounts, or changing encryption keys.
+
+In particular, keep `/workspace/.beeper-grok` when updating a Grok Bot installation. Do not run bootstrap merely because the helper version changed. Check the installed plugin version in `.grok-plugin/plugin.json`; use one scoped read on a known chat to verify an already working installation. See [the changelog](CHANGELOG.md) for 0.6.4 changes.
+
+## Runtime, downloads, and data
+
+The cloud helper requires Linux x86_64/aarch64 and Python 3.10+. Browser work uses an existing compatible Node runtime and Chrome/Chromium. On the PC, the helper can also use Node embedded in an already installed Grok Desktop app. Linux is tested; macOS/Windows discovery paths exist but end-to-end support is unverified. Earlier Node 20.19.2 compatibility checks are recorded in [the test guide](tests/README.md); they are not a claim of a fresh test on every runtime.
+
+`browser-check` checks existing runtime/browser availability on the computer running it without installing software or starting Server. The PC helper has a separate local `check` command.
+
+| Location | Contents |
+| --- | --- |
+| `/workspace/.beeper-grok` on Grok Bot | CLI, Server profile, target credentials, pending setup state, QR support |
+| `~/.local/share/beeper-grok-plugin` elsewhere | Default data location outside a Grok workspace |
+| `BEEPER_PLUGIN_HOME` | Optional override; keep this stable across updates |
+| `~/.beeper-browser/profiles` on the PC | Separate provider browser profiles |
+
+Credentials and pending login state use private filesystem permissions and stay outside the plugin checkout. The helper communicates with Server only through its fixed loopback target. `BEEPER_READONLY=1` blocks helper mutations; read commands and batches also use CLI read-only mode.
+
+Bootstrap pins official Beeper CLI 0.6.2 and qrcode 8.2 downloads by SHA-256. It preserves an existing CLI binary. The CLI obtains Server through Beeper's installer; the plugin does not pin or patch Server binaries. Downloads require GitHub, Python's package CDN, and Beeper services. This is not an offline bundle. See [setup limits](skills/beeper/references/setup.md#known-upstream-limits) for the reviewed nightly/production distinction.
+
+## Privacy and permissions
+
+- Website collection is restricted to supported named cookies, local-storage entries, and request headers requested by the selected provider. The helper never executes bridge-supplied arbitrary `extractJS`, reads browser cookie databases/password vaults, or copies your ordinary profile.
+- Each ten-minute transfer uses ephemeral X25519, HKDF-SHA-256, and AES-256-GCM. The receiver's private key stays on the cloud computer. Grok's local-tool transport carries ciphertext; no public receiver or relay is used.
+- Transfers are bound to the pending login step and consumed before submission. Ambiguous failures require checking account state instead of replaying the same encrypted session.
+- The plugin adds no telemetry. Beeper and the connected networks have their own service terms and privacy practices; see [Beeper's privacy policy](https://www.beeper.com/privacy).
+- Requested message content enters your Grok conversation. A user request to send authorizes sending the specified content to the selected recipient; installation, drafting, and diagnostics do not.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Server says `initializing`, but reads work | Global setup/E2EE state is separate from network freshness. Check the requested account and timestamps; do not reset keys or reconnect solely for this flag. |
+| WhatsApp or another account says `reconnect_required` | Reauthenticate that existing account using its returned login ID. An account error takes precedence over a generic bridge “Connected” label. |
+| Chats appear old or missing | Walk pagination, verify returned account IDs, and compare timestamps in a known conversation. A server-side account filter may still return mixed networks. |
+| Browser never opens | Check the selected PC, actual available Grok local tools, runtime preflight, and fresh approval. Do not change Chrome settings or silently fall back to cloud. |
+| Browser waits for cookies | Inspect required versus optional fields with `browser-plan`. Missing optional cookies do not justify another sign-in. |
+| Completion page appears but connection fails | Check `network-show` and `accounts`. Local transfer completion is separate from bridge acceptance; an expired bridge transaction needs diagnosis. |
+| Reads fail or are empty | Treat failures as errors, and verify account, scope, and sync. Do not patch Server or reconnect as an automatic repair. |
+| Grok feels slow | Avoid repeated diagnostics, fetch only the requested scope, and batch independent reads. Measure CLI/API, tool latency, and provider ingestion separately. |
+
+Start with [setup](skills/beeper/references/setup.md) or [browser recovery](skills/beeper/references/browser-login.md). Do not attach raw config, session envelopes, credentials, private message bodies, or unsanitized logs to issues.
+
+## Develop and validate
+
+```sh
+python3 -m unittest discover -s tests -v
+grok plugin validate .
+git diff --check
+```
+
+To include optional synthetic Chrome cases, set `BEEPER_BROWSER_TEST=1`; use `BEEPER_TEST_CHROME` if Chrome is not discovered automatically. Run sequentially and follow your host's resource/lock requirements. Tests use disposable profiles and a fake API; they do not authenticate real accounts or send messages. See [tests/README.md](tests/README.md) for coverage and acceptance limits.
+
+The code lives in `skills/beeper/scripts/`; Grok's entry point is `skills/beeper/SKILL.md`, with detailed workflow references next to it. There are no npm dependencies or custom CLI sources in this plugin.
+
+### Package for Grok
+
+From a clean Git checkout:
+
+```sh
+python3 scripts/package_plugin.py --output dist
+```
+
+This creates a plugin-only ZIP, an equivalent JSON source bundle, `SEND-TO-GROK.txt`, and `SHA256SUMS`. Packaging uses committed Git files, excludes runtime state, and records the source commit. It does not install, upload, or publish anything.
+
+## Support and license
+
+Report reproducible plugin problems in [this repository's issues](https://github.com/suatsulun/beeper-grok-plugin/issues), with plugin/CLI/Server versions, the operation, and a sanitized error. Upstream CLI/API behavior belongs in [Beeper CLI](https://github.com/beeper/cli).
+
+Plugin source is [MIT licensed](LICENSE). Downloaded Beeper CLI and qrcode retain their upstream licenses and terms. Beeper branding belongs to its owners and is not covered by this project's MIT license. This is an independent integration, not an official Beeper or xAI product.

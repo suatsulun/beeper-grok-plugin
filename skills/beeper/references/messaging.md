@@ -23,6 +23,27 @@ python3 HELPER cli -- man
 python3 HELPER cli -- messages list --help
 ```
 
+## Several independent reads
+
+Use one batch when the requested chat IDs/queries are already known. This runs the same CLI commands and preserves filters, cursors, ordering and result limits. This uses the official CLI 0.6.2 RPC protocol and reduces separate Grok tool/helper invocations. The CLI still starts its normal command subprocesses; batches do not remove that cost. No background service or extra installation is required.
+
+```sh
+python3 HELPER batch <<'JSON'
+[
+  {"id":"first","args":["messages","list","--chat","FIRST_CHAT_ID","--limit","20"]},
+  {"id":"second","args":["messages","list","--chat","SECOND_CHAT_ID","--limit","20"]}
+]
+JSON
+```
+
+Pass a JSON array on stdin, with 1–32 requests containing unique `id` values and string-array `args`. Supported commands are `chats/messages/contacts list/search/show` and `version`. The helper fixes target, JSON and read-only settings. Endpoint/debug overrides and writes are rejected before anything starts. Batches are sequential and return `results` with per-request success or error plus `allSucceeded`; partial failure is not an empty inbox. Do not batch a lookup with a dependent command whose chat ID is not yet known. One failed command is not retried. A batch timeout stops the RPC process group, leaving Server running.
+
+Use returned IDs and fetch only the requested scope. Avoid broad exports, repeated help/status calls and repeated identical reads. Retrieve command help only when the needed flag or behavior is unknown. For `--ids`, the helper returns an `ids` array; normal message results retain their existing shape.
+
+## Freshness and connection state
+
+Paginate before concluding that a chat or message is absent. Chat lists can contain mixed networks even when a Server account filter was supplied; verify each returned account ID when a network restriction matters. Compare provider-side and Server timestamps for a named conversation before diagnosing sync lag. Convert times to the user's timezone. The global Server setup/E2EE fields do not measure individual bridge freshness. If an account explicitly requires reconnection, use the existing account's login ID; never reconnect healthy accounts as a performance test.
+
 ## Send
 
 Match the chat's account, title, and participants to the user's requested recipient; then use that exact chat ID. Ask about ambiguous recipients rather than picking an arbitrary match. Contact IDs are not chat IDs. Use `chats start --help` if a new conversation is needed.

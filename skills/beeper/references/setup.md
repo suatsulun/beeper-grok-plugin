@@ -11,7 +11,7 @@ python3 HELPER status
 
 Bootstrap installs checksum-pinned Beeper CLI 0.6.2 and qrcode 8.2 into the private data directory, downloads Server through Beeper's official CLI, chooses an unused loopback port, creates the isolated `grok-bot` target, and starts it. No system package installation or root permission is needed. It requires network access to GitHub, Python's package CDN, and Beeper's download/authentication services. Downloads and extraction may take several minutes; run the tool as a background/yielding command and report progress while it works.
 
-Keep durable data in `/workspace/.beeper-grok` on Grok Bot. Starting a process is not a guarantee it survives computer replacement. Run `status` on subsequent use, then `start` or `bootstrap` as necessary. Existing target/profile/authentication files are reused. Do not choose a new data directory to get past an authentication problem.
+Keep durable data in `/workspace/.beeper-grok` on Grok Bot. Starting a process is not a guarantee it survives computer replacement. When a fresh runtime is detected or a read fails, run `status`, then `start` or `bootstrap` as necessary. Successful routine reads do not need another preflight. Existing target/profile/authentication files are reused. Do not choose a new data directory to get past an authentication problem.
 
 `bootstrap --cli-only` restores the CLI and QR renderer without installing or starting Server. `stop` stops only this plugin's managed Server.
 
@@ -98,9 +98,9 @@ python3 HELPER browser-check
 python3 HELPER browser-plan
 ```
 
-Run `browser-start --browser local` and follow the browser guide. Obtain fresh local approval for the exact provider connection and encrypted return, then run `local_browser.mjs connect REQUEST.json --transfer-on-login` on the user’s PC. It uses their normal Chrome profile and creates a new provider window with no Beeper approval page. The user must enable Chrome’s connection setting and approve Chrome’s prompt; never do that for them. Submit the returned envelope automatically using `browser-finish --stdin`. Use a separate profile only when explicitly requested, adding `--separate-profile`; explain that it lacks their usual extensions and saved passwords. If local tools, Chrome access or fresh approval are unavailable, report that limit; never silently substitute another profile or cloud browser. No extension, relay or Node upgrade is needed; the helper does not depend on `Bun.WebView`.
+Run `browser-start --browser local` and follow the browser guide. Obtain fresh local approval for the exact provider connection and encrypted return, then run `local_browser.mjs connect REQUEST.json --transfer-on-login` on the user's PC. It opens the provider directly in a dedicated window; no Chrome settings or additional Beeper approval page are needed. Submit the returned envelope automatically using `browser-finish --stdin`. Reusing an ordinary Chrome profile is an explicit alternative with its own Chrome permission and review prompts. If local tools or fresh approval are unavailable, report that limit; use a cloud browser only if the user explicitly chooses it. No extension, relay or Node upgrade is needed; the helper does not depend on `Bun.WebView`.
 
-Both local browser choices resume the saved login and submit only the required fields to Server. Do not cancel and recreate a login merely to switch browser modes. If a browser attempt fails or times out, inspect `network-show` and `accounts` before another attempt. Unsupported fields or providers produce explicit errors. Connected accounts and a scoped read establish successful network setup.
+Both local browser choices resume the saved login and submit required fields plus supported optional fields that are present to Server. Do not cancel and recreate a login merely to switch browser modes. If a browser attempt fails or times out, inspect `network-show` and `accounts` before another attempt. Unsupported fields or providers produce explicit errors. Connected accounts and a scoped read establish successful network setup.
 
 ### Clipboard and password managers
 

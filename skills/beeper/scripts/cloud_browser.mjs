@@ -65,20 +65,17 @@ export async function attachBrowser(endpoint) {
   return connectBrowserWebSocket(wsURL.href);
 }
 
-export async function connectBrowserWebSocket(endpoint, {connectTimeout = 5000, signal, abortAfterConnect = true} = {}) {
+export async function connectBrowserWebSocket(endpoint, {connectTimeout = 5000, signal} = {}) {
   const wsURL = new URL(endpoint);
   if (wsURL.protocol !== 'ws:' || wsURL.hostname !== '127.0.0.1' || !wsURL.port ||
       wsURL.username || wsURL.password || wsURL.search || wsURL.hash ||
       !/^\/devtools\/browser\/[\w-]+$/.test(wsURL.pathname)) throw Error('Invalid browser transport.');
   const socket = new WebSocket(wsURL);
-  let resolveClosed;
-  const disconnected = new Promise(resolve => { resolveClosed = resolve; });
   const abort = () => socket.close();
   signal?.addEventListener('abort', abort, {once:true});
   let sequence = 0;
   const pending = new Map(), listeners = new Set();
   const closed = () => {
-    resolveClosed();
     for (const call of pending.values()) { clearTimeout(call.timer); call.reject(Error('Browser disconnected.')); }
     pending.clear();
   };
@@ -93,9 +90,6 @@ export async function connectBrowserWebSocket(endpoint, {connectTimeout = 5000, 
       socket.addEventListener('close', () => { clearTimeout(timer); reject(Error('Browser connection closed.')); }, {once:true});
     });
   } catch (error) { signal?.removeEventListener('abort', abort); socket.close(); throw error; }
-  // A caller that owns only a target needs the connection alive long enough to
-  // close that target on cancellation, then disconnect in its own cleanup.
-  if (!abortAfterConnect) signal?.removeEventListener('abort', abort);
   socket.addEventListener('message', event => {
     let message;
     try { message = JSON.parse(event.data); } catch { return; }
@@ -112,7 +106,7 @@ export async function connectBrowserWebSocket(endpoint, {connectTimeout = 5000, 
     socket.send(JSON.stringify({id, method, params, ...(sessionId ? {sessionId} : {})}));
   });
   // Disconnect only. Never close Grok's browser or its other tabs.
-  return {send, listeners, closed:disconnected, close:async () => { signal?.removeEventListener('abort', abort); closed(); socket.close(); }};
+  return {send, listeners, close:async () => { signal?.removeEventListener('abort', abort); closed(); socket.close(); }};
 }
 
 export async function collectSession(browser, plan, {timeout = 600, providers:registry = providers, navigateURL, signal, onReady, onProgress, targetId:ownedTarget, keepOpen = false} = {}) {
@@ -201,7 +195,7 @@ export async function collectSession(browser, plan, {timeout = 600, providers:re
     } finally { browser.listeners.delete(observe); }
   } finally {
     signal?.removeEventListener('abort', cancel);
-    // A supplied target must be created by the caller, even in a shared browser.
+    // A supplied target must also belong to the caller's owned browser.
     if (!keepOpen || !collected) await browser.send('Target.closeTarget', {targetId}).catch(() => {});
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "beeper",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Set up Beeper Server with Grok Bot, sign in to Beeper, connect chat networks, and work with your messages from chat.",
   "author": {
     "name": "Suat Sülün",
@@ -9,7 +9,12 @@
   "repository": "https://github.com/suatsulun/beeper-grok-plugin",
   "homepage": "https://github.com/suatsulun/beeper-grok-plugin",
   "license": "MIT",
-  "keywords": ["beeper", "beeper server", "beeper setup", "beeper chats"],
+  "keywords": [
+    "beeper",
+    "beeper server",
+    "beeper setup",
+    "beeper chats"
+  ],
   "skills": "./skills/",
   "logo": "./assets/logo.png"
 }
