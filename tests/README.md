@@ -4,6 +4,8 @@ Run `python3 -m unittest discover -s tests -v` with the existing Python runtime.
 
 The tests cover credential isolation, private sign-in, failed or duplicate form submissions, recovery, registration refusal, download integrity, preserving an existing profile, update backups/restart behavior, command scope, and bounded message events. They test behavior at CLI/HTTP boundaries, not every upstream network capability.
 
+Release lookup tests cover operation without GitHub's API, no authorization header even when token variables exist, the 15-minute cache, stale/invalid cache rejection, exact release/architecture/filename/digest matching, structured rate-limit/reset information, and ordinary HTTP 403 errors. Update-check tests verify that the native CLI is asked to check Server only, and that a failed CLI lookup is not reported as “up to date.”
+
 Also run `grok plugin validate .` and `git diff --check`. An isolated official CLI can be used to validate help flags and output parsing without logging in. A Server download or unauthenticated start does not prove that an existing account will sync.
 
 For live acceptance on Grok's cloud computer:

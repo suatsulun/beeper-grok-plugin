@@ -15,12 +15,13 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 from urllib.parse import urlencode, urlsplit
 
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "skills/beeper/scripts"))
 from beeper import Failure, Runtime, emit, read_json, write_json
-from install import install_cli
+from install import InstallError, RELEASES, install_cli, latest
 from signin import make_server
 
 FAKE_CLI = r'''
@@ -98,6 +99,37 @@ class RuntimeFixture(unittest.TestCase):
 
 
 class RuntimeTests(RuntimeFixture):
+    def test_update_checks_share_release_cache_and_skip_native_cli_check(self):
+        self.existing()
+        release = {"version": "0.6.2", "source": "release-manifest", "cached": True, "checkedAt": 100}
+        with patch("install.latest", return_value=release) as lookup:
+            data = self.runtime.check_updates()
+        lookup.assert_called_once_with(self.root)
+        self.assertTrue(data[0]["checked"])
+        self.assertTrue(data[0]["cached"])
+        self.assertFalse(data[0]["available"])
+        self.assertEqual(self.calls()[-1], ["update", "--check", "--server", "--json"])
+
+    def test_failed_cli_lookup_does_not_hide_server_check_or_claim_up_to_date(self):
+        self.existing()
+        with patch("install.latest", side_effect=InstallError("GitHub unavailable", "github_unreachable")):
+            data = self.runtime.check_updates()
+        self.assertFalse(data[0]["checked"])
+        self.assertIsNone(data[0]["available"])
+        self.assertEqual(data[0]["error"]["code"], "github_unreachable")
+        self.assertEqual(data[1]["kind"], "server")
+        self.assertTrue(data[1]["available"])
+
+    def test_lookup_failure_before_setup_preserves_existing_installation(self):
+        self.existing()
+        before = self.runtime.target_file.read_bytes()
+        calls = len(self.calls())
+        with patch("install.latest", side_effect=InstallError("Bad manifest", "invalid_release_metadata")):
+            with self.assertRaises(InstallError):
+                self.runtime.setup(update=True)
+        self.assertEqual(self.runtime.target_file.read_bytes(), before)
+        self.assertEqual(len(self.calls()), calls)
+
     def test_setup_reuses_existing_profile_without_network_or_reinstallation(self):
         profile = self.existing()
         before = self.runtime.target_file.read_bytes()
@@ -365,6 +397,134 @@ class SigninTests(RuntimeFixture):
         self.assertEqual(api.call_args.args[1], "/v1/app/setup/verification/recovery-key")
 
 
+class Response(io.BytesIO):
+    def __init__(self, body=b"", url=""):
+        super().__init__(body)
+        self.url = url
+
+    def geturl(self):
+        return self.url
+
+
+class ReleaseLookupTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix=".test-", dir=PROJECT)
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.manifest = {"version": "0.6.2", "artifacts": [{
+            "file": "beeper-cli-0.6.2-linux-x64.tar.gz", "platform": "linux-x64", "sha256": "a" * 64}]}
+        self.cache = self.root / "cache/cli-release-linux-x64.json"
+        for name, value in (("machine", "x86_64"), ("system", "Linux")):
+            mock = patch("install.platform." + name, return_value=value)
+            mock.start()
+            self.addCleanup(mock.stop)
+
+    def response(self, url):
+        if url == RELEASES + "/latest":
+            return Response(url=RELEASES + "/tag/v0.6.2")
+        if url == RELEASES + "/download/v0.6.2/binaries.json":
+            return Response(json.dumps(self.manifest).encode())
+        raise AssertionError("Unexpected URL: " + url)
+
+    def test_release_lookup_works_with_api_blocked_and_never_sends_token(self):
+        calls = []
+
+        def open_request(req, timeout):
+            calls.append(req.full_url)
+            self.assertIsNone(req.get_header("Authorization"))
+            if req.full_url.startswith("https://api.github.com/"):
+                raise HTTPError(req.full_url, 403, "rate limit", {"X-RateLimit-Remaining": "0"}, None)
+            return self.response(req.full_url)
+
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "PRIVATE_TOKEN", "GH_TOKEN": "OTHER_PRIVATE_TOKEN"}), patch("install.urllib.request.urlopen", side_effect=open_request):
+            release = latest(self.root)
+        self.assertEqual(release["version"], "0.6.2")
+        self.assertEqual(release["source"], "release-manifest")
+        self.assertEqual(release["sha256"], "a" * 64)
+        self.assertFalse(release["cached"])
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("PRIVATE_TOKEN", json.dumps(release) + self.cache.read_text())
+
+    def test_warm_cache_needs_no_network(self):
+        with patch("install.request", side_effect=self.response):
+            original = latest(self.root)
+        with patch("install.request", side_effect=AssertionError("Unexpected network request")):
+            cached = latest(self.root)
+        self.assertTrue(cached["cached"])
+        self.assertEqual(original["sha256"], cached["sha256"])
+        self.assertEqual(self.cache.stat().st_mode & 0o777, 0o600)
+
+    def test_arm64_selects_its_own_archive_and_cache(self):
+        self.manifest["artifacts"] = [{"file": "beeper-cli-0.6.2-linux-arm64.tar.gz",
+                                       "platform": "linux-arm64", "sha256": "b" * 64}]
+        with patch("install.platform.machine", return_value="aarch64"), patch("install.request", side_effect=self.response):
+            result = latest(self.root)
+        self.assertEqual(result["platform"], "linux-arm64")
+        self.assertTrue(result["url"].endswith("-linux-arm64.tar.gz"))
+        self.assertTrue((self.root / "cache/cli-release-linux-arm64.json").exists())
+        self.assertFalse(self.cache.exists())
+
+    def test_expired_future_and_tampered_caches_are_not_used(self):
+        with patch("install.request", side_effect=self.response):
+            original = latest(self.root)
+        variants = [{**original, "checkedAt": time.time() - 901},
+                    {**original, "checkedAt": time.time() + 3600},
+                    {**original, "url": "https://attacker.example/binary"},
+                    {**original, "platform": "linux-arm64"}]
+        for data in variants:
+            with self.subTest(data=data):
+                self.cache.write_text(json.dumps(data))
+                with patch("install.request", side_effect=self.response) as download:
+                    result = latest(self.root)
+                self.assertFalse(result["cached"])
+                self.assertEqual(download.call_count, 2)
+
+    def test_manifest_must_have_matching_version_platform_and_one_digest(self):
+        original = json.loads(json.dumps(self.manifest))
+        invalid = [
+            {**original, "version": "0.6.1"},
+            {**original, "artifacts": []},
+            {**original, "artifacts": original["artifacts"] * 2},
+            {**original, "artifacts": [{**original["artifacts"][0], "sha256": "bad"}]},
+            {**original, "artifacts": [{**original["artifacts"][0], "sha256": None}]},
+            {**original, "artifacts": [{**original["artifacts"][0], "platform": "linux-arm64"}]},
+            {**original, "artifacts": [{**original["artifacts"][0], "file": "../../beeper"}]},
+        ]
+        for manifest in invalid:
+            with self.subTest(manifest=manifest), patch("install.request", side_effect=self.response):
+                self.manifest = manifest
+                with self.assertRaises(InstallError) as caught:
+                    latest(self.root)
+                self.assertEqual(caught.exception.info["code"], "invalid_release_metadata")
+                self.assertFalse(self.cache.exists())
+                self.assertFalse((self.root / "bin/beeper").exists())
+
+    def test_unexpected_latest_redirect_is_rejected_before_manifest_download(self):
+        for url in (RELEASES + "/tag/v1.2.3-beta", RELEASES + "/tag/v0.6.2?other=1", "https://attacker.example/tag/v0.6.2"):
+            with self.subTest(url=url), patch("install.request", return_value=Response(url=url)) as download:
+                with self.assertRaises(InstallError): latest(self.root)
+                self.assertEqual(download.call_count, 1)
+
+    def test_http_rate_limit_has_structured_reset_and_no_raw_response(self):
+        headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1801132500", "Retry-After": "60"}
+        for status in (403, 429):
+            error = HTTPError(RELEASES + "/latest", status, "PRIVATE_DIAGNOSTIC", headers, io.BytesIO(b"PRIVATE_BODY"))
+            with self.subTest(status=status), patch("install.urllib.request.urlopen", side_effect=error):
+                with self.assertRaises(InstallError) as caught: latest(self.root)
+                data = caught.exception.info
+                self.assertEqual(data["code"], "github_rate_limited")
+                self.assertEqual(data["retryAfterSeconds"], 60)
+                self.assertTrue(data["resetAt"].endswith("+00:00"))
+                self.assertNotIn("PRIVATE", json.dumps(data))
+
+    def test_plain_403_is_not_mislabeled_as_a_rate_limit(self):
+        error = HTTPError(RELEASES + "/latest", 403, "Forbidden", {}, None)
+        with patch("install.urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(InstallError) as caught: latest(self.root)
+        self.assertEqual(caught.exception.info["code"], "github_http_error")
+        self.assertEqual(caught.exception.info["httpStatus"], 403)
+
+
 class InstallerTests(unittest.TestCase):
     def bundle(self, symlink=False):
         data = io.BytesIO()
@@ -387,6 +547,27 @@ class InstallerTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "checksum"):
                     install_cli(root, {"version": "1.2.3", "url": "synthetic", "sha256": "0" * 64})
             self.assertEqual((root / "bin/beeper").read_bytes(), b"old")
+
+    def test_public_manifest_to_verified_install_without_api(self):
+        content = self.bundle()
+        name = "beeper-cli-0.6.2-linux-x64.tar.gz"
+        manifest = {"version": "0.6.2", "artifacts": [{"file": name, "platform": "linux-x64",
+                                                       "sha256": hashlib.sha256(content).hexdigest()}]}
+        visited = []
+
+        def download(url):
+            visited.append(url)
+            if url == RELEASES + "/latest": return Response(url=RELEASES + "/tag/v0.6.2")
+            if url == RELEASES + "/download/v0.6.2/binaries.json": return Response(json.dumps(manifest).encode())
+            if url == RELEASES + "/download/v0.6.2/" + name: return Response(content)
+            raise AssertionError("Unexpected API or download URL")
+
+        with tempfile.TemporaryDirectory(prefix=".test-", dir=PROJECT) as temp, patch("install.request", side_effect=download), patch("install.platform.machine", return_value="x86_64"), patch("install.platform.system", return_value="Linux"):
+            root = Path(temp)
+            release = latest(root)
+            install_cli(root, release)
+            self.assertEqual((root / "bin/beeper").read_bytes(), b"synthetic binary")
+            self.assertEqual(len(visited), 3)
 
     def test_only_binary_bytes_are_extracted_and_old_cli_is_retained(self):
         content = self.bundle()

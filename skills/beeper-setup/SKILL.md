@@ -16,7 +16,11 @@ python3 "$HELPER" setup
 
 Run `setup` if the tools, target, or running process are missing. It installs the latest official standalone CLI with a SHA-256 check, asks that CLI to install official Server, creates a production target only when absent, and starts it. It preserves an existing target, accounts, and keys. Repeating setup does not replace an existing installation. If only the process stopped, `start` is enough.
 
+Since v0.7.1, CLI discovery uses GitHub's public release redirect and Beeper's `binaries.json`, without GitHub's REST API. Setup needs no GitHub account, token, or secret prompt. Do not wait for an API quota reset before trying this helper. It caches validated release metadata for 15 minutes, shared by setup and update checks; results include `source`, `checkedAt`, and `cached`. The archive's SHA-256 is still checked before installation. That digest is supplied by Beeper with the release; it checks the downloaded bytes against the publisher's manifest, not an independent security audit.
+
 Wait for the same installation job instead of launching duplicates. Check status again if Server is still starting. Existing credentials mean resume verification or reads, not sign in again. If credentials expired or a saved executable disappeared, explain that exact condition before attempting a repair; do not silently replace the profile.
+
+For a download failure, read the structured `error.code`. `github_rate_limited` includes a reset time in UTC or retry delay when GitHub supplies one; convert it to the user's timezone and avoid repeated retries. `github_http_error` with HTTP 403 alone does not prove a rate limit. `invalid_release_metadata` or `checksum_mismatch` must stop installation; never skip verification. Downloads can still fail independently of the API quota. A Beeper Server CDN failure is a separate problem. Don't reset accounts or schedule a fresh profile just to retry a download.
 
 ## Sign in privately
 
@@ -79,6 +83,8 @@ python3 "$HELPER" update
 ```
 
 The update command checks the official CLI release, replaces it only if its version changed, and retains `bin/beeper.previous`. For an available Server update it stops the profile, makes a private config/profile and program backup under `private-backups/`, uses official `beeper update --server`, and starts the same target. Leave backups private; never attach them. A shared installation with other Server profiles needs separate review, so the helper stops before changing that Server.
+
+`check-updates` uses the same cached release manifest for CLI, and native `update --check --server` only for Server. Don't replace it with native `update --check --cli`, which still calls GitHub's API. A result with `checked: false` or `available: null` means unknown, not up to date; the other component's result can still be useful. If a delayed setup job was already scheduled for an old API quota reset, inspect its current state and update that same job to use the new helper. Do not start competing setup jobs or assume the scheduled job never ran.
 
 Afterward repeat the account/chat/message checks above and compare account IDs with the pre-update result. Don't claim success from an updater exit code alone. No automatic rollback: an updated database may be incompatible with an old executable. Preserve the backup and report any regression.
 

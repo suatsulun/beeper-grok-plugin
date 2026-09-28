@@ -20,7 +20,7 @@ import urllib.parse
 import urllib.request
 
 TARGET = "grok-bot"
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 SETUP = "/v1/app/setup"
 
 
@@ -199,8 +199,9 @@ class Runtime:
         self.writable()
         from install import install_cli, latest
         with self.lock():
+            release = None
             if not self.binary.exists() or update:
-                release = latest()
+                release = latest(self.root)
                 current = self.cli(["version"], timeout=180)["version"] if self.binary.exists() else None
                 if current != release["version"]:
                     install_cli(self.root, release)
@@ -225,7 +226,30 @@ class Runtime:
                 if any(item.get("available") for item in check):
                     backup = self.update_server(installed)
             self.cli(["targets", "start", TARGET])
-        return {"backup": backup, "status": self.status()}
+        return {"backup": backup, "cliRelease": release, "status": self.status()}
+
+    def check_updates(self):
+        from install import InstallError, latest
+        current = self.cli(["version"])["version"] if self.binary.exists() else None
+        try:
+            release = latest(self.root)
+            results = [{"kind": "cli", "checked": True, "currentVersion": current,
+                        "latestVersion": release["version"], "available": current != release["version"],
+                        "source": release["source"], "cached": release["cached"], "checkedAt": release["checkedAt"]}]
+        except InstallError as error:
+            results = [{"kind": "cli", "checked": False, "currentVersion": current,
+                        "available": None, "error": error.info}]
+        if not read_json(self.config / "installations.json").get("server"):
+            results.append({"kind": "server", "installed": False, "action": "Run setup."})
+        elif not self.binary.exists():
+            results.append({"kind": "server", "checked": False, "available": None, "error": "CLI is missing."})
+        else:
+            try:
+                # --server prevents the native updater from checking GitHub's API.
+                results.extend(self.cli(["update", "--check", "--server"]))
+            except Failure as error:
+                results.append({"kind": "server", "checked": False, "available": None, "error": str(error)})
+        return results
 
     def update_server(self, installed):
         targets = list((self.config / "targets").glob("*.json"))
@@ -338,7 +362,7 @@ def main():
             runtime.writable()
             data = runtime.cli(["targets", "start", TARGET])
         elif args.action == "check-updates":
-            data = runtime.cli(["update", "--check", "--cli", "--server"])
+            data = runtime.check_updates()
         elif args.action in ("signin", "recovery"):
             from signin import serve
             data = serve(runtime, args.action)
@@ -350,6 +374,10 @@ def main():
             data = runtime.command(args.arguments)
         emit({"success": True, "data": data})
     except Exception as error:
+        from install import InstallError
+        if isinstance(error, InstallError):
+            emit({"success": False, "error": error.info})
+            return 1
         message = str(error) if isinstance(error, Failure) else f"{type(error).__name__}: operation failed; raw details withheld. Check status before retrying."
         emit({"success": False, "error": message})
         return 1

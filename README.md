@@ -21,6 +21,8 @@ Five short skills: Beeper routing, setup, messages, chats, and reports. Three Py
 
 Data stays outside the plugin at `/workspace/.beeper-grok`. Existing `grok-bot` profiles from the 0.6.x plugin are reused. Updating this source alone does not change Server or sign anyone out. “Update Beeper” checks official releases, keeps the old CLI, backs up a stopped Server's profile and program, and runs the official updater. It never patches Beeper binaries or resets account data.
 
+**v0.7.1 removes the GitHub API requirement from setup and CLI update checks.** It reads Beeper's public release manifest, caches release details for 15 minutes, and verifies the downloaded archive's SHA-256. Users need no GitHub token and don't have to wait for a shared API quota to reset. Ordinary download restrictions or Beeper Server download failures can still occur; the helper reports them separately. The checksum comes from Beeper's release manifest, so it verifies agreement with the publisher's release, not independent authenticity.
+
 As checked on **28 September 2026**, the latest published CLI is **0.6.2**. The CLI's Server nightly feed reports **4.3.156**; the separate stable feed reports **4.3.152**. Beeper's installer currently uses the nightly feed for Server while the account still signs into production. These are release checks, not a claim that a user's cloud installation has already been updated.
 
 ## Install and development

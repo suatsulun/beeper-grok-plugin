@@ -6,34 +6,114 @@ import re
 import shutil
 import tarfile
 import tempfile
+import time
+from datetime import datetime, timezone
+import urllib.error
 import urllib.request
 from pathlib import Path
 
-RELEASE = "https://api.github.com/repos/beeper/cli/releases/latest"
+RELEASES = "https://github.com/beeper/cli/releases"
+CACHE_SECONDS = 15 * 60
 MAX_DOWNLOAD = 250 * 1024 * 1024
 
 
+class InstallError(RuntimeError):
+    def __init__(self, message, code, **details):
+        super().__init__(message)
+        self.info = {"code": code, "message": message, **details}
+
+
 def request(url):
-    return urllib.request.urlopen(urllib.request.Request(
-        url, headers={"User-Agent": "beeper-grok-plugin/0.7.0"}), timeout=120)
+    # Public release downloads need no API call or GitHub credential.
+    try:
+        return urllib.request.urlopen(urllib.request.Request(
+            url, headers={"User-Agent": "beeper-grok-plugin/0.7.1"}), timeout=120)
+    except urllib.error.HTTPError as error:
+        status, headers = error.code, error.headers
+        error.close()
+        details = {"httpStatus": status}
+        limited = status == 429 or (status == 403 and (
+            headers.get("X-RateLimit-Remaining") == "0" or headers.get("Retry-After")))
+        if limited:
+            try:
+                reset = int(headers.get("X-RateLimit-Reset", ""))
+                details["resetAt"] = datetime.fromtimestamp(reset, timezone.utc).isoformat()
+            except (ValueError, OverflowError, OSError):
+                pass
+            try:
+                details["retryAfterSeconds"] = max(0, int(headers.get("Retry-After", "")))
+            except ValueError:
+                pass
+            hint = " Retry after " + details["resetAt"] + "." if "resetAt" in details else ""
+            raise InstallError("GitHub is rate-limiting this download." + hint + " Do not retry repeatedly.",
+                               "github_rate_limited", **details) from None
+        raise InstallError(f"GitHub release download returned HTTP {status}. This alone does not establish a rate limit.",
+                           "github_http_error", **details) from None
+    except (urllib.error.URLError, TimeoutError, ConnectionError):
+        raise InstallError("GitHub release download is unavailable or timed out.", "github_unreachable") from None
 
 
-def latest():
+def valid_release(data, arch):
+    if not isinstance(data, dict):
+        return False
+    version = data.get("version")
+    if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        return False
+    name = f"beeper-cli-{version}-linux-{arch}.tar.gz"
+    return (data.get("url") == f"{RELEASES}/download/v{version}/{name}"
+            and isinstance(data.get("sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", data["sha256"])
+            and data.get("platform") == f"linux-{arch}" and data.get("source") == "release-manifest")
+
+
+def latest(root=None):
     arch = {"x86_64": "x64", "aarch64": "arm64"}.get(platform.machine())
     if platform.system() != "Linux" or not arch:
-        raise RuntimeError("Run setup on Grok's Linux cloud computer (x64 or arm64).")
-    with request(RELEASE) as response:
-        release = json.load(response)
-    version = release["tag_name"].removeprefix("v")
-    if not re.fullmatch(r"\d+\.\d+\.\d+", version) or release.get("prerelease"):
-        raise RuntimeError("The official CLI release is not a stable version.")
+        raise InstallError("Run setup on Grok's Linux cloud computer (x64 or arm64).", "unsupported_platform")
+    cache = Path(root) / "cache" / f"cli-release-linux-{arch}.json" if root is not None else None
+    if cache and cache.exists():
+        try:
+            data = json.loads(cache.read_text())
+            age = time.time() - float(data["checkedAt"])
+            if 0 <= age < CACHE_SECONDS and valid_release(data, arch):
+                return {**data, "cached": True}
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+    # Resolve GitHub's stable-release redirect, then use that immutable tag for
+    # both the manifest and archive. Never scrape a page or guess a checksum.
+    with request(RELEASES + "/latest") as response:
+        match = re.fullmatch(re.escape(RELEASES) + r"/tag/v(\d+\.\d+\.\d+)", response.geturl())
+    if not match:
+        raise InstallError("GitHub did not resolve to an official stable Beeper CLI release.", "invalid_release_metadata")
+    version = match[1]
     name = f"beeper-cli-{version}-linux-{arch}.tar.gz"
-    asset = next(a for a in release["assets"] if a["name"] == name)
-    digest = asset.get("digest", "")
-    url = f"https://github.com/beeper/cli/releases/download/v{version}/{name}"
-    if asset["browser_download_url"] != url or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-        raise RuntimeError("The official CLI asset has no verifiable SHA-256 digest.")
-    return {"version": version, "url": url, "sha256": digest[7:]}
+    with request(f"{RELEASES}/download/v{version}/binaries.json") as response:
+        raw = response.read(1024 * 1024 + 1)
+    try:
+        manifest = json.loads(raw) if len(raw) <= 1024 * 1024 else None
+        if not isinstance(manifest, dict) or manifest.get("version") != version:
+            raise ValueError()
+        artifacts = manifest.get("artifacts")
+        if not isinstance(artifacts, list):
+            raise ValueError()
+        matches = [a for a in artifacts if isinstance(a, dict) and a.get("file") == name]
+        if len(matches) != 1:
+            raise ValueError()
+        asset = matches[0]
+        data = {"version": version, "url": f"{RELEASES}/download/v{version}/{name}",
+                "sha256": asset.get("sha256"), "platform": asset.get("platform"),
+                "source": "release-manifest", "checkedAt": int(time.time())}
+        if not valid_release(data, arch):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise InstallError("The official release manifest has no unique matching archive with a valid SHA-256. Nothing was installed.",
+                           "invalid_release_metadata") from None
+    if cache:
+        cache.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with tempfile.NamedTemporaryFile(mode="w", dir=cache.parent, delete=False) as stream:
+            json.dump(data, stream)
+            temporary = Path(stream.name)
+        temporary.replace(cache)
+    return {**data, "cached": False}
 
 
 def install_cli(root, release):
@@ -53,7 +133,7 @@ def install_cli(root, release):
                 digest.update(chunk)
                 output.write(chunk)
         if digest.hexdigest() != release["sha256"]:
-            raise RuntimeError("CLI checksum mismatch; the installed CLI was left unchanged.")
+            raise InstallError("CLI checksum mismatch; the installed CLI was left unchanged.", "checksum_mismatch")
         candidate = Path(temporary) / "beeper"
         with tarfile.open(archive) as bundle:
             members = [m for m in bundle.getmembers() if m.isfile()
