@@ -1,6 +1,7 @@
 """Behavior tests with synthetic data; no Beeper account or network access."""
 from contextlib import redirect_stdout
 import hashlib
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import http.client
 import io
 import json
@@ -13,6 +14,7 @@ import tarfile
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -42,7 +44,14 @@ elif args[:2]==['install','server']:
  program=root/'cache/server-build/beeper-server'; program.parent.mkdir(parents=True,exist_ok=True);program.write_text('old program')
  save(config/'installations.json',{'server':{'version':'4.3.115','path':str(program)}})
 elif args[:3]==['targets','add','server']:
- save(target_file,{'type':'server','managed':True,'serverEnv':'production','baseURL':'http://127.0.0.1:'+args[args.index('--port')+1]})
+ port=int(args[args.index('--port')+1])
+ save(target_file,{'id':'grok-bot','type':'server','managed':True,'serverEnv':'production','dataDir':str(config/'profiles/server/grok-bot'),'port':port,'baseURL':'http://127.0.0.1:'+str(port)})
+elif args[:2]==['targets','stop']:
+ if (root/'stopped').exists() or (root/'fail-stop').exists():
+  print(json.dumps({'success':False,'error':'Profile could not be stopped'}),file=sys.stderr);sys.exit(1)
+ (root/'stopped').touch()
+elif args[:2]==['targets','start']:
+ (root/'stopped').unlink(missing_ok=True)
 elif args[0]=='update':
  if '--check' in args: data=[{'kind':'server','available':not (root/'up-to-date').exists()}]
  elif (root/'fail-update').exists():
@@ -81,6 +90,9 @@ class RuntimeFixture(unittest.TestCase):
         self.runtime.binary.parent.mkdir()
         self.runtime.binary.write_text(f"#!{sys.executable}\n" + FAKE_CLI)
         self.runtime.binary.chmod(0o700)
+        running = patch.object(self.runtime, "server_running", side_effect=lambda: not (self.root / "stopped").exists())
+        running.start()
+        self.addCleanup(running.stop)
 
     def existing(self, authenticated=True):
         self.runtime.cli(["install", "server"])
@@ -96,6 +108,11 @@ class RuntimeFixture(unittest.TestCase):
 
     def calls(self):
         return [json.loads(line) for line in (self.root / "calls.jsonl").read_text().splitlines()]
+
+    def helper(self, *args):
+        return subprocess.run([sys.executable, str(PROJECT / "skills/beeper/scripts/beeper.py"), *args],
+                              env={**os.environ, "BEEPER_PLUGIN_HOME": str(self.root)},
+                              capture_output=True, text=True, timeout=5)
 
 
 class RuntimeTests(RuntimeFixture):
@@ -174,7 +191,9 @@ class RuntimeTests(RuntimeFixture):
     def test_network_login_and_target_overrides_are_out_of_scope(self):
         for args in (["accounts", "add"], ["accounts", "remove", "network"], ["api", "post", "/v1/reset"],
                      ["chats", "list", "--base-url=https://example.com"], ["chats", "list", "-tother"],
-                     ["chats", "list", "--debug"]):
+                     ["chats", "list", "--target=other"], ["chats", "list", "--target", "other"],
+                     ["chats", "list", "-qtother"], ["chats", "list", "-ytother"],
+                     ["chats", "list", "-qyt", "other"], ["chats", "list", "--debug"]):
             with self.subTest(args=args), self.assertRaises(Failure):
                 self.runtime.command(args)
 
@@ -185,7 +204,8 @@ class RuntimeTests(RuntimeFixture):
             result = self.runtime.setup(update=True)
         backup = Path(result["backup"])
         with tarfile.open(backup / "config.tar.gz") as archive:
-            self.assertEqual(archive.extractfile("config/profiles/server/grok-bot/keys.fixture").read(), b"synthetic encryption state")
+            self.assertEqual(archive.extractfile("profile/keys.fixture").read(), b"synthetic encryption state")
+            self.assertNotIn("config/profiles/server/grok-bot/keys.fixture", archive.getnames())
             self.assertEqual(archive.extractfile("config/targets/grok-bot.json").read(), original)
         self.assertEqual((backup / "server-program/beeper-server").read_text(), "old program")
         self.assertEqual((profile / "keys.fixture").read_text(), "synthetic encryption state")
@@ -195,6 +215,84 @@ class RuntimeTests(RuntimeFixture):
         self.assertLess(next(i for i,c in enumerate(calls) if c[:2] == ["targets", "stop"]),
                         next(i for i,c in enumerate(calls) if c[:2] == ["update", "--server"] and "--check" not in c))
         self.assertEqual(backup.stat().st_mode & 0o777, 0o700)
+
+    def test_start_cannot_bypass_an_update_or_signin_lock(self):
+        self.existing()
+        before = self.calls()
+        with self.runtime.lock():
+            result = self.helper("start")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("running", json.loads(result.stdout)["error"])
+        self.assertEqual(self.calls(), before)
+        self.assertEqual(self.helper("start").returncode, 0)
+
+    def test_stopped_profile_updates_without_stop_and_stop_failure_aborts(self):
+        self.existing()
+        (self.root / "stopped").touch()
+        with patch("install.latest", return_value={"version": "0.6.2"}):
+            result = self.runtime.setup(update=True)
+        self.assertTrue(Path(result["backup"]).is_dir())
+        self.assertFalse(any(c[:2] == ["targets", "stop"] for c in self.calls()))
+        (self.root / "fail-stop").touch()
+        before = len(self.calls())
+        with patch("install.latest", return_value={"version": "0.6.2"}), self.assertRaises(Failure):
+            self.runtime.setup(update=True)
+        self.assertFalse(any(c == ["update", "--server", "--json"] for c in self.calls()[before:]))
+
+    def test_live_pid_listener_and_stale_pid_checks(self):
+        self.existing()
+        receiver = HTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+        target = self.runtime.target()
+        target.update(port=receiver.server_port, baseURL=f"http://127.0.0.1:{receiver.server_port}")
+        write_json(self.runtime.target_file, target)
+        try:
+            self.assertTrue(Runtime.server_running(self.runtime))
+        finally:
+            receiver.server_close()
+        run_file = self.runtime.config / "run/profiles/grok-bot.json"
+        write_json(run_file, {"pid": os.getpid()})
+        self.assertTrue(Runtime.server_running(self.runtime))
+        with subprocess.Popen([sys.executable, "-c", "pass"]) as child:
+            child.wait(timeout=5)
+        write_json(run_file, {"pid": child.pid})
+        self.assertFalse(Runtime.server_running(self.runtime))
+        run_file.unlink()
+        self.assertFalse(Runtime.server_running(self.runtime))
+
+    def test_server_must_be_stopped_before_backup(self):
+        self.existing()
+        with patch.object(self.runtime, "server_running", return_value=True), \
+                patch("install.latest", return_value={"version": "0.6.2"}), self.assertRaisesRegex(Failure, "still running"):
+            self.runtime.setup(update=True)
+        self.assertFalse((self.root / "private-backups").exists())
+        self.assertFalse(any(c == ["update", "--server", "--json"] for c in self.calls()))
+
+    def test_external_profile_and_symlinked_root_are_backed_up(self):
+        profile = self.existing()
+        external = self.root / "external-profile"
+        profile.rename(external)
+        profile.symlink_to(external, target_is_directory=True)
+        target = self.runtime.target()
+        for data_dir in (str(external), str(profile)):
+            with self.subTest(data_dir=data_dir):
+                target["dataDir"] = data_dir
+                write_json(self.runtime.target_file, target)
+                with patch("install.latest", return_value={"version": "0.6.2"}), \
+                        patch("beeper.time.strftime", return_value=str(len(self.calls()))):
+                    result = self.runtime.setup(update=True)
+                backup = Path(result["backup"])
+                with tarfile.open(backup / "config.tar.gz") as archive:
+                    self.assertEqual(archive.extractfile("profile/keys.fixture").read(), b"synthetic encryption state")
+                layout = read_json(backup / "profile.json")
+                self.assertEqual(layout["resolvedDataDir"], str(external))
+                self.assertEqual(layout["dataDir"], data_dir)
+
+    def test_linked_profile_subdirectory_stops_update_without_recursing(self):
+        profile = self.existing()
+        (profile / "loop").symlink_to(profile, target_is_directory=True)
+        with patch("install.latest", return_value={"version": "0.6.2"}), self.assertRaisesRegex(Failure, "linked directory"):
+            self.runtime.setup(update=True)
+        self.assertFalse(any(c == ["update", "--server", "--json"] for c in self.calls()))
 
     def test_update_failure_restarts_profile_and_withholds_raw_error(self):
         self.existing()
@@ -245,6 +343,12 @@ class RuntimeTests(RuntimeFixture):
         self.assertIn("code timeout", str(caught.exception))
         self.assertNotIn("PRIVATE_VALUE", str(caught.exception))
 
+    def test_unreachable_target_status_keeps_its_diagnostic(self):
+        diagnostic = {"reachable": False, "error": "Could not reach target"}
+        result = subprocess.CompletedProcess([], 1, json.dumps({"success": True, "data": diagnostic}).encode(), b"")
+        with patch.object(self.runtime, "run", return_value=(result, False)):
+            self.assertEqual(self.runtime.cli(["targets", "status", "grok-bot"]), diagnostic)
+
     def test_watch_returns_events_on_deadline_and_reports_connection_failure(self):
         self.existing()
         data = self.runtime.watch(1, "chat-1")
@@ -273,6 +377,30 @@ class RuntimeTests(RuntimeFixture):
         write_json(self.root / "verification.fixture.json", {"id": "active", "state": "requested"})
         self.assertEqual(self.runtime.verify("start")["id"], "active")
         self.assertFalse(any(c[:2] == ["verify", "start"] for c in self.calls()))
+
+    def test_incoming_verification_accepts_only_current_available_request(self):
+        self.existing()
+        path = self.root / "verification.fixture.json"
+        write_json(path, {"id": "incoming-1", "state": "requested", "availableActions": ["accept", "cancel"]})
+        self.assertEqual(self.runtime.verify("start")["id"], "incoming-1")
+        result = self.helper("verify", "approve")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(self.calls()[-1], ["verify", "approve", "--id", "incoming-1", "--json"])
+        write_json(path, {"id": "incoming-2", "state": "ready", "availableActions": ["sas.start"]})
+        with self.assertRaisesRegex(Failure, "not waiting for acceptance"):
+            self.runtime.verify("approve")
+
+    def test_script_entry_preserves_expected_signin_errors(self):
+        self.existing()
+        result = self.helper("signin")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("already signed in", json.loads(result.stdout)["error"])
+        target = self.runtime.target()
+        target.pop("auth")
+        write_json(self.runtime.target_file, target)
+        result = self.helper("recovery")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Sign in by email", json.loads(result.stdout)["error"])
 
     def test_watch_deadline_also_stops_cli_child_process(self):
         self.existing()
@@ -387,7 +515,7 @@ class SigninTests(RuntimeFixture):
         target["auth"] = {"accessToken": "SYNTHETIC_SECRET"}
         write_json(self.runtime.target_file, target)
         server = self.server("recovery")
-        with patch.object(self.runtime, "api", side_effect=[Failure("upstream echoed PRIVATE_KEY"), {}]) as api:
+        with patch.object(self.runtime, "api", side_effect=[Failure("upstream echoed PRIVATE_KEY", code=400), {}]) as api:
             status, body, _ = self.request(server, self.fields(server, "PRIVATE_KEY"))
             self.assertNotIn("PRIVATE_KEY", body)
             self.assertFalse(server.done)
@@ -395,6 +523,143 @@ class SigninTests(RuntimeFixture):
         self.assertTrue(server.result["recoverySubmitted"])
         self.assertNotIn("PRIVATE_KEY", json.dumps(server.result))
         self.assertEqual(api.call_args.args[1], "/v1/app/setup/verification/recovery-key")
+
+    def test_expired_code_can_be_resent_and_old_form_cannot_replay(self):
+        server = self.server()
+        responses = [{"setupRequestID": "old-request"}, {}, Failure("private rejection", code=400),
+                     {"setupRequestID": "new-request"}, {}, {"matrix": {"accessToken": "SYNTHETIC_NEW"}}]
+        with patch.object(self.runtime, "api", side_effect=responses) as api:
+            self.request(server, self.fields(server, "person@example.test"))
+            old_form = self.fields(server, "old-code")
+            _, body, _ = self.request(server, old_form)
+            self.assertIn("Send a new code", body)
+            self.assertNotIn("start sign-in again", body)
+            self.request(server, {**self.fields(server, ""), "action": "resend"})
+            self.assertEqual(self.request(server, old_form)[0], 400)
+            self.request(server, self.fields(server, "new-code"))
+        self.assertTrue(server.result["signedIn"])
+        self.assertEqual(api.call_args_list[4].args[2]["email"], "person@example.test")
+        self.assertEqual(api.call_args_list[-1].args[2]["setupRequestID"], "new-request")
+
+    def test_email_can_be_corrected_without_replacing_private_job(self):
+        server = self.server()
+        with patch.object(self.runtime, "api", side_effect=[{"setupRequestID": "first"}, {}, {"setupRequestID": "second"}, {}]) as api:
+            self.request(server, self.fields(server, "wrong@example.test"))
+            old_form = self.fields(server, "stale-code")
+            self.request(server, {**old_form, "action": "restart"})
+            self.assertEqual(server.step, "email")
+            self.request(server, self.fields(server, "right@example.test"))
+            self.assertEqual(self.request(server, old_form)[0], 400)
+        self.assertEqual(api.call_args.args[2]["email"], "right@example.test")
+        self.assertEqual(server.request_id, "second")
+
+    def test_ambiguous_authentication_stops_instead_of_replaying(self):
+        server = self.server()
+        with patch.object(self.runtime, "api", side_effect=[{"setupRequestID": "req"}, {}, Failure("PRIVATE_TIMEOUT")]) as api:
+            self.request(server, self.fields(server, "person@example.test"))
+            fields = self.fields(server, "private-code")
+            _, body, _ = self.request(server, fields)
+            self.assertEqual(self.request(server, fields)[0], 403)
+        self.assertTrue(server.done)
+        self.assertIsInstance(server.error, Failure)
+        self.assertIn("uncertain", str(server.error))
+        self.assertNotIn("PRIVATE_TIMEOUT", body)
+        self.assertNotIn("private-code", body)
+        self.assertEqual(api.call_count, 3)
+
+    def test_cancelling_real_private_job_releases_lock_immediately(self):
+        command = [sys.executable, str(PROJECT / "skills/beeper/scripts/beeper.py"), "signin"]
+        # Two consecutive jobs prove cancellation permits an immediate replacement.
+        for _ in range(2):
+            with subprocess.Popen(command, env={**os.environ, "BEEPER_PLUGIN_HOME": str(self.root)},
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as child:
+                try:
+                    first = json.loads(child.stdout.readline())
+                    url = first["data"]["privateURL"]
+                    parsed = urlsplit(url)
+                    server = SimpleNamespace(url=url, address=parsed.netloc, server_port=parsed.port, step="email")
+                    with self.assertRaises(Failure):
+                        with self.runtime.lock():
+                            pass
+                    fields = {**self.fields(server, ""), "action": "cancel"}
+                    with patch.object(self.runtime, "api") as api:
+                        self.assertEqual(self.request(server, {**fields, "csrf": "wrong"})[0], 400)
+                        self.assertEqual(self.request(server, fields, origin=False)[0], 403)
+                        self.assertEqual(self.request(server, fields)[0], 200)
+                        api.assert_not_called()
+                    stdout, stderr = child.communicate(timeout=5)
+                    self.assertEqual(child.returncode, 1)
+                    self.assertIn("cancelled", json.loads(stdout)["error"])
+                    self.assertEqual(stderr, "")
+                    with self.runtime.lock():
+                        pass
+                finally:
+                    if child.poll() is None:
+                        child.kill()
+                        child.wait(timeout=5)
+
+
+@unittest.skipUnless(os.environ.get("BEEPER_TEST_CLI"), "Set BEEPER_TEST_CLI to an isolated published CLI")
+class PublishedCLITests(RuntimeFixture):
+    def setUp(self):
+        super().setUp()
+        self.existing()
+        self.received = []
+        received = self.received
+        verification = {"id": "incoming-native", "state": "requested", "availableActions": ["accept", "cancel"]}
+
+        class Receiver(BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                received.append((self.command, self.path, self.headers.get("Authorization")))
+                body = {"state": "needs-verification", "verification": verification} if self.path == "/v1/app/setup" else []
+                payload = json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            do_POST = do_GET
+
+        self.receiver = HTTPServer(("127.0.0.1", 0), Receiver)
+        thread = threading.Thread(target=self.receiver.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(self.receiver.server_close)
+        self.addCleanup(lambda: thread.join(timeout=2))
+        self.addCleanup(self.receiver.shutdown)
+        self.runtime.binary = Path(os.environ["BEEPER_TEST_CLI"]).resolve()
+        env = self.runtime.env()
+        if os.environ.get("BEEPER_TEST_CLI_CACHE"):
+            env["BEEPER_CLI_BINARY_CACHE_DIR"] = os.environ["BEEPER_TEST_CLI_CACHE"]
+        environment = patch.object(self.runtime, "env", return_value=env)
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def point_primary_at_receiver(self):
+        target = self.runtime.target()
+        target.update(port=self.receiver.server_port, baseURL=f"http://127.0.0.1:{self.receiver.server_port}")
+        write_json(self.runtime.target_file, target)
+
+    def test_target_override_cannot_forward_token_but_normal_read_works(self):
+        write_json(self.runtime.config / "targets/other.json", {
+            "id": "other", "type": "remote", "baseURL": f"http://127.0.0.1:{self.receiver.server_port}"})
+        for flags in (["-qtother"], ["-ytother"], ["-qyt", "other"], ["--target=other"],
+                      ["--base-url", f"http://127.0.0.1:{self.receiver.server_port}"]):
+            with self.subTest(flags=flags), self.assertRaises(Failure):
+                self.runtime.command(["accounts", "list", *flags])
+        self.assertEqual(self.received, [])
+        self.point_primary_at_receiver()
+        self.assertEqual(self.runtime.command(["accounts", "list", "--quiet"]), [])
+        self.assertEqual(self.received, [("GET", "/v1/accounts", "Bearer SYNTHETIC_SECRET")])
+
+    def test_incoming_accept_uses_the_published_endpoint_and_explicit_id(self):
+        self.point_primary_at_receiver()
+        self.runtime.verify("approve")
+        self.assertEqual([item[:2] for item in self.received], [
+            ("GET", "/v1/app/setup"), ("POST", "/v1/app/setup/verifications/incoming-native/accept")])
 
 
 class Response(io.BytesIO):

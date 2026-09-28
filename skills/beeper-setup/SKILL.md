@@ -32,6 +32,8 @@ python3 "$HELPER" signin
 
 Keep this job running. It prints one `privateURL`; open that URL in **Grok's cloud computer browser**, then hand browser control to the user. It is a loopback URL on that computer, not a link to open on their phone or PC. The same page takes their Beeper email and emailed code. Don't ask for either secret in chat, inspect what they type, take credential screenshots, or put values in tool arguments. Await the same job after submission; the page says it can be closed, and the job returns the next step. It expires after ten minutes. Cancellation or expiry is not success.
 
+The page can resend a code, change the email, or cancel without creating a second job. Cancel releases the job's lock; closing the browser alone does not. Await the cancelled or expired job before replacing it. If the result says authentication is uncertain, check Server status first and do not resubmit the code/key or start another sign-in blindly.
+
 If the current Grok interface cannot provide private cloud-browser takeover, explain that limitation and keep setup pending; don't substitute chat for secret entry. An existing recovery key unlocks encryption **after email sign-in**; it is not a replacement for account authentication. This flow never accepts registration terms or creates a Beeper account.
 
 ## Verify the new device
@@ -44,7 +46,7 @@ python3 "$HELPER" verify start
 python3 "$HELPER" verify show
 ```
 
-Run `start` only when no active request exists. Ask the user to approve the new session in their signed-in Beeper app. Resume from the returned state and `availableActions`. When `sas.start` is offered, run `verify sas`, then `verify show`. Present the returned emoji sequence or numbers exactly. Confirm only after the user explicitly says both devices match:
+Run `start` only when no active request exists. Ask the user to approve the new session in their signed-in Beeper app. Resume from the returned state and `availableActions`. For an incoming request the user initiated on their trusted device, run `verify approve` when `accept` is offered. This accepts the request; it does not confirm a comparison. When `sas.start` is offered, run `verify sas`, then `verify show`. Present the returned emoji sequence or numbers exactly. Confirm only after the user explicitly says both devices match:
 
 ```sh
 python3 "$HELPER" verify sas-confirm --matches
@@ -83,6 +85,8 @@ python3 "$HELPER" update
 ```
 
 The update command checks the official CLI release, replaces it only if its version changed, and retains `bin/beeper.previous`. For an available Server update it stops the profile, makes a private config/profile and program backup under `private-backups/`, uses official `beeper update --server`, and starts the same target. Leave backups private; never attach them. A shared installation with other Server profiles needs separate review, so the helper stops before changing that Server.
+
+An already-stopped Server can be updated. Setup, update, start, and private sign-in share one lock. The backup contains `config/` and the actual data directory under `profile/` in `config.tar.gz`; `profile.json` records its original and resolved paths. External data directories and a symlinked profile root are supported. Linked directories inside a profile require backup review before an update; the helper stops instead of following a possible loop. No automatic restore is performed.
 
 `check-updates` uses the same cached release manifest for CLI, and native `update --check --server` only for Server. Don't replace it with native `update --check --cli`, which still calls GitHub's API. A result with `checked: false` or `available: null` means unknown, not up to date; the other component's result can still be useful. If a delayed setup job was already scheduled for an old API quota reset, inspect its current state and update that same job to use the new helper. Do not start competing setup jobs or assume the scheduled job never ran.
 

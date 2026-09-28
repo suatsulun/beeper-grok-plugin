@@ -16,7 +16,6 @@ def make_server(runtime, kind, lifetime=600):
     if kind == "recovery" and not signed_in:
         raise Failure("Sign in by email before unlocking encrypted messages.")
     path = "/" + secrets.token_urlsafe(32)
-    csrf = secrets.token_urlsafe(32)
 
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -56,10 +55,14 @@ def make_server(runtime, kind, lifetime=600):
             }[self.server.step]
             self.reply(200, '<h1>Sign in to Beeper</h1><p>Enter this privately. It goes to Beeper Server on your Grok computer.</p>'
                        + (f'<p>{html.escape(error)}</p>' if error else "")
-                       + f'<form method="post" action="{path}"><input type="hidden" name="csrf" value="{csrf}">'
+                       + f'<form method="post" action="{path}"><input type="hidden" name="csrf" value="{self.server.csrf}">'
                        + f'<input type="hidden" name="step" value="{self.server.step}">'
                        + f'<label>{label}<input name="value" type="{input_type}" autocomplete="{autocomplete}" required autofocus maxlength="4096"></label>'
-                       + '<button>Continue</button></form>')
+                       + '<button name="action" value="submit">Continue</button>'
+                       + ('<button name="action" value="resend" formnovalidate>Send a new code</button>'
+                          '<button name="action" value="restart" formnovalidate>Change email</button>'
+                          if self.server.step == "code" else '')
+                       + '<button name="action" value="cancel" formnovalidate>Cancel</button></form>')
 
         def do_GET(self):
             if not self.valid():
@@ -78,22 +81,40 @@ def make_server(runtime, kind, lifetime=600):
                 fields = parse_qs(self.rfile.read(length).decode(), strict_parsing=True)
                 if any(len(values) != 1 for values in fields.values()):
                     raise ValueError()
-                if not secrets.compare_digest(fields.get("csrf", [""])[0], csrf):
+                if not secrets.compare_digest(fields.get("csrf", [""])[0], self.server.csrf):
                     raise ValueError()
                 if fields.get("step", [""])[0] != self.server.step:
                     raise ValueError()
+                action = fields.get("action", ["submit"])[0]
+                if action not in ("submit", "cancel") and not (self.server.step == "code" and action in ("resend", "restart")):
+                    raise ValueError()
                 value = fields.get("value", [""])[0].strip()
-                if not value or len(value) > 4096:
+                if action == "submit" and (not value or len(value) > 4096):
                     raise ValueError()
             except (ValueError, UnicodeDecodeError, TimeoutError):
                 self.reply(400, "<p>Invalid or expired form. Reload this page.</p>")
                 return
+            if action == "cancel":
+                self.server.error = Failure("The private sign-in was cancelled.")
+                self.server.done = True
+                self.reply(200, "<h1>Cancelled</h1><p>You can close this window now.</p>")
+                return
+            if action == "restart":
+                self.server.step = "email"
+                self.server.request_id = None
+                self.server.csrf = secrets.token_urlsafe(32)
+                self.page()
+                return
             try:
-                if self.server.step == "email":
+                if self.server.step == "email" or action == "resend":
+                    email = self.server.email if action == "resend" else value
+                    self.server.step = "email"
                     request = runtime.api("POST", SETUP + "/start", public=True)
-                    runtime.api("POST", SETUP + "/email", {"setupRequestID": request["setupRequestID"], "email": value}, public=True)
+                    runtime.api("POST", SETUP + "/email", {"setupRequestID": request["setupRequestID"], "email": email}, public=True)
+                    self.server.email = email
                     self.server.request_id = request["setupRequestID"]
                     self.server.step = "code"
+                    self.server.csrf = secrets.token_urlsafe(32)
                     self.page()
                     return
                 if self.server.step == "code":
@@ -113,8 +134,16 @@ def make_server(runtime, kind, lifetime=600):
                 else:
                     runtime.api("POST", SETUP + "/verification/recovery-key", {"recoveryKey": value})
                     self.server.result = {"recoverySubmitted": True, "next": "status"}
-            except Exception:
-                self.page("Beeper could not complete this step. Check the value. If the code expired, close this page and ask Grok to start sign-in again.")
+            except Exception as error:
+                # A rejected value can be corrected here. A lost response may have
+                # completed authentication; stop so Grok checks status, not replays it.
+                if isinstance(error, Failure) and (self.server.step == "email" or error.code in (400, 401, 403, 404, 422)):
+                    self.page("Beeper did not accept this step. Check the value or cancel to let Grok check setup."
+                              + (" You can also get a new code or change email below." if self.server.step == "code" else ""))
+                    return
+                self.server.error = Failure("Sign-in outcome is uncertain. Check Server status before starting another sign-in.")
+                self.server.done = True
+                self.reply(200, "<h1>Grok needs to check your sign-in</h1><p>You can close this window now. Do not submit the code or key again yet.</p>")
                 return
             self.server.done = True
             self.reply(200, "<h1>You can close this window now</h1><p>Grok will check your account and finish setup. Device verification may still be needed.</p>")
@@ -123,8 +152,10 @@ def make_server(runtime, kind, lifetime=600):
     server.address = f"127.0.0.1:{server.server_port}"
     server.url = "http://" + server.address + path
     server.step = "email" if kind == "signin" else "recovery"
+    server.csrf = secrets.token_urlsafe(32)
     server.deadline = time.monotonic() + lifetime
     server.done, server.result = False, None
+    server.error = None
     server.timeout = 1
     return server
 
@@ -137,4 +168,6 @@ def serve(runtime, kind, lifetime=600):
             server.handle_request()
         if not server.done:
             raise Failure("The private sign-in page expired. No completed sign-in was reported.")
+        if server.error:
+            raise server.error
         return server.result

@@ -1,6 +1,6 @@
 {
   "name": "beeper",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Set up Beeper on Grok's cloud computer, sign in to your existing account, and read, send, organize, and summarize messages.",
   "author": {
     "name": "Suat Sülün",

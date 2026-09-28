@@ -20,12 +20,14 @@ import urllib.parse
 import urllib.request
 
 TARGET = "grok-bot"
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 SETUP = "/v1/app/setup"
 
 
 class Failure(Exception):
-    pass
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
 
 
 def read_json(path):
@@ -81,14 +83,17 @@ class Runtime:
             try:
                 fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                raise Failure("Another setup or update is running. Wait for that job.") from None
+                raise Failure("Another setup, update, or private sign-in is running. Await that job or cancel its private page.") from None
             yield
 
     def target(self):
         target = read_json(self.target_file)
         url = urllib.parse.urlsplit(target.get("baseURL", ""))
-        if (target.get("type") != "server" or target.get("serverEnv", "production") != "production"
+        if (target.get("id") != TARGET or target.get("type") != "server" or not target.get("managed")
+                or not isinstance(target.get("dataDir"), str) or not target["dataDir"]
+                or target.get("serverEnv", "production") != "production"
                 or url.scheme != "http" or url.hostname != "127.0.0.1" or not url.port
+                or url.port != (target.get("port") or target.get("runtime", {}).get("port") or url.port)
                 or url.username or url.password or url.query or url.fragment or url.path not in ("", "/")):
             raise Failure("Expected the existing production, loopback grok-bot Server target. Run setup if missing.")
         return target
@@ -134,8 +139,8 @@ class Runtime:
             try:
                 # Released CLI failures are JSON on stderr, unlike success data.
                 decoded = json.loads(result.stdout or result.stderr)
-                # doctor deliberately exits nonzero when setup is incomplete.
-                if args[0] == "doctor" and decoded.get("success") is True:
+                # These diagnostics deliberately exit nonzero when not ready/reachable.
+                if (args[0] == "doctor" or args[:2] == ["targets", "status"]) and decoded.get("success") is True:
                     return decoded["data"]
                 error = decoded.get("error", {})
                 code = error.get("code", "unknown") if isinstance(error, dict) else "unknown"
@@ -181,7 +186,7 @@ class Runtime:
         except urllib.error.HTTPError as error:
             code = error.code
             error.close()
-            raise Failure(f"Beeper API returned HTTP {code}. No response body or submitted value was printed.") from None
+            raise Failure(f"Beeper API returned HTTP {code}. No response body or submitted value was printed.", code=code) from None
         except (urllib.error.URLError, TimeoutError, ConnectionError):
             raise Failure("Beeper Server is unreachable or timed out. Check status before retrying.") from None
 
@@ -225,7 +230,8 @@ class Runtime:
                 check = self.cli(["update", "--server", "--check"])
                 if any(item.get("available") for item in check):
                     backup = self.update_server(installed)
-            self.cli(["targets", "start", TARGET])
+            if backup is None:
+                self.cli(["targets", "start", TARGET])
         return {"backup": backup, "cliRelease": release, "status": self.status()}
 
     def check_updates(self):
@@ -255,13 +261,29 @@ class Runtime:
         targets = list((self.config / "targets").glob("*.json"))
         if any(p != self.target_file and read_json(p).get("type") == "server" for p in targets):
             raise Failure("This installation serves another Server profile. Review all profiles before updating the shared program.")
-        self.cli(["targets", "stop", TARGET])
+        profile = Path(self.target()["dataDir"]).resolve(strict=True)
+        if not profile.is_dir() or self.root.is_relative_to(profile) or self.config.resolve().is_relative_to(profile):
+            raise Failure("The profile must be a separate data directory. Preserve it and review its location before updating.")
+        if self.server_running():
+            self.cli(["targets", "stop", TARGET])
+        if self.server_running():
+            raise Failure("Server is still running. No backup or update was attempted.")
         backup = self.root / "private-backups" / ("before-update-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
         try:
             backup.mkdir(parents=True, mode=0o700)
-            # Stop first so the account and encryption databases form a consistent copy.
+            # Keep one copy of the actual profile, including an external or linked root.
             with tarfile.open(backup / "config.tar.gz", "w:gz") as archive:
-                archive.add(self.config, arcname="config")
+                archive.add(self.config, arcname="config", filter=lambda item: None
+                    if (self.config / Path(item.name).relative_to("config")).resolve() == profile else item)
+                archive.dereference = True
+                def profile_entry(item):
+                    source = profile / Path(item.name).relative_to("profile")
+                    if source.is_symlink() and item.isdir():
+                        raise Failure("The profile contains a linked directory. Review its backup layout before updating.")
+                    return item
+                archive.add(profile, arcname="profile", filter=profile_entry)
+            write_json(backup / "profile.json", {"dataDir": self.target()["dataDir"],
+                       "resolvedDataDir": str(profile), "archive": "config.tar.gz", "prefix": "profile"})
             program = Path(installed["path"]).resolve()
             if program.is_dir():
                 shutil.copytree(program, backup / "server-program", symlinks=True)
@@ -274,6 +296,21 @@ class Runtime:
             self.cli(["targets", "start", TARGET])
         return str(backup)
 
+    def server_running(self):
+        # A listening port or a live managed PID prevents an offline backup.
+        pid = read_json(self.config / "run/profiles" / f"{TARGET}.json").get("pid")
+        if isinstance(pid, int) and pid > 0:
+            try:
+                os.kill(pid, 0)
+                return True
+            except ProcessLookupError:
+                pass
+        try:
+            with socket.create_connection(("127.0.0.1", urllib.parse.urlsplit(self.target()["baseURL"]).port), timeout=1):
+                return True
+        except ConnectionRefusedError:
+            return False
+
     def command(self, args):
         allowed = {"accounts", "chats", "messages", "send", "contacts", "media", "presence", "export", "version", "doctor", "man"}
         if not args or args[0] not in allowed:
@@ -281,8 +318,9 @@ class Runtime:
         if args[0] == "accounts" and (len(args) < 2 or args[1] not in ("list", "show", "--help")):
             raise Failure("Only existing accounts are supported. Adding, reconnecting, and removing accounts are outside this plugin.")
         blocked = ("--target", "--base-url", "--debug", "--no-json", "--events", "--ids")
-        if any(a.split("=", 1)[0] in blocked or (a.startswith("-t") and not a.startswith("--")) for a in args):
-            raise Failure("Keep the fixed target and JSON output; target overrides and debug output are disabled.")
+        # Only long options: short clusters such as -qtother can hide a target override.
+        if any(a.split("=", 1)[0] in blocked or re.match(r"^-[A-Za-z]", a) for a in args):
+            raise Failure("Use long options. Target overrides, debug output, and non-JSON output are disabled.")
         if args[:2] in (["chats", "archive"], ["chats", "unarchive"]) and "--help" not in args:
             # CLI 0.6.2 uses the wrong archive endpoint; this is the official
             # endpoint already used by the SDK and the unreleased upstream fix.
@@ -308,6 +346,8 @@ class Runtime:
             return current
         if step == "start" and current and current.get("state") not in ("done", "cancelled", "error"):
             return current
+        if step == "approve" and (not current or "accept" not in current.get("availableActions", [])):
+            raise Failure("The current verification is not waiting for acceptance. Show its available actions.")
         if step == "sas-confirm":
             shown = read_json(comparison_file) or {}
             if (not matches or not current or not current.get("sas")
@@ -346,7 +386,7 @@ def main():
     cli = actions.add_parser("cli", help="Run a native Beeper messaging command")
     cli.add_argument("arguments", nargs=argparse.REMAINDER)
     verify = actions.add_parser("verify")
-    verify.add_argument("step", choices=("start", "show", "sas", "sas-confirm", "cancel"))
+    verify.add_argument("step", choices=("start", "show", "approve", "sas", "sas-confirm", "cancel"))
     verify.add_argument("--matches", action="store_true", help="Use only after the user confirms the displayed comparison matches")
     watch = actions.add_parser("watch")
     watch.add_argument("--seconds", type=int, choices=range(1, 61), default=30, metavar="1..60")
@@ -360,7 +400,8 @@ def main():
             data = runtime.status()
         elif args.action == "start":
             runtime.writable()
-            data = runtime.cli(["targets", "start", TARGET])
+            with runtime.lock():
+                data = runtime.cli(["targets", "start", TARGET])
         elif args.action == "check-updates":
             data = runtime.check_updates()
         elif args.action in ("signin", "recovery"):
@@ -385,4 +426,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # signin imports beeper; script execution must share the same Failure class.
+    sys.modules["beeper"] = sys.modules[__name__]
     sys.exit(main())
