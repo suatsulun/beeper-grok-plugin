@@ -132,12 +132,19 @@ class Runtime:
             # Upstream errors may echo a submitted secret or message. Keep diagnostics
             # useful without printing raw stderr, credentials, or configuration.
             try:
-                decoded = json.loads(result.stdout)
+                # Released CLI failures are JSON on stderr, unlike success data.
+                decoded = json.loads(result.stdout or result.stderr)
                 # doctor deliberately exits nonzero when setup is incomplete.
                 if args[0] == "doctor" and decoded.get("success") is True:
                     return decoded["data"]
                 error = decoded.get("error", {})
                 code = error.get("code", "unknown") if isinstance(error, dict) else "unknown"
+                message = error.get("message", "") if isinstance(error, dict) else str(error)
+                if "timed out" in message.lower():
+                    code = "timeout"
+                http = re.search(r"(?:HTTP|returned) ([45]\d\d)\b", message, re.I)
+                if http:
+                    code = "http_" + http[1]
             except ValueError:
                 code = "unknown"
             code = code if re.fullmatch(r"[a-zA-Z0-9_-]{1,60}", str(code)) else "unknown"

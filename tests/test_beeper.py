@@ -204,6 +204,15 @@ class RuntimeTests(RuntimeFixture):
         self.assertEqual(output.read_text(), "[]")
         self.assertTrue(self.runtime.command(["export", "--out", str(self.root / "export")])["completed"])
 
+    def test_structured_stderr_failure_is_classified_without_echoing_it(self):
+        failure = {"success": False, "error": "The operation timed out. PRIVATE_VALUE", "exitCode": 1, "kind": "bug"}
+        result = subprocess.CompletedProcess([], 1, b"", json.dumps(failure).encode())
+        with patch.object(self.runtime, "run", return_value=(result, False)):
+            with self.assertRaises(Failure) as caught:
+                self.runtime.cli(["install", "server"])
+        self.assertIn("code timeout", str(caught.exception))
+        self.assertNotIn("PRIVATE_VALUE", str(caught.exception))
+
     def test_watch_returns_events_on_deadline_and_reports_connection_failure(self):
         self.existing()
         data = self.runtime.watch(1, "chat-1")
