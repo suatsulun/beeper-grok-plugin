@@ -1,63 +1,53 @@
-Beeper Grok plugin 0.7.5 — reaction identity acceptance
+Beeper Grok plugin 0.7.6 — shared-cloud onboarding acceptance
 
-This candidate fixes the confirmed 0.7.4 own-reaction identity mismatch. It does
-not need another send, a CLI/Server update, an account change, or the whole live
-0.7.4 audit again. Keep the current installed plugin, CLI, Server process,
-BEEPER_PLUGIN_HOME, target, profile, and accounts unchanged during this check.
+The plugin now has one default onboarding flow: inspect the shared cloud setup,
+ask before a new installation, install official CLI/Server after consent, and
+reuse the same profile from every device. Keep the user's current CLI, Server,
+profile, accounts, and saved test messages unchanged during acceptance.
 
-1. Extract the candidate archive into a new persistent directory outside the
-   existing plugin and profile. Verify SHA256SUMS, SOURCE-REVISION.txt and version
-   0.7.5 in .grok-plugin/plugin.json. Read the changed README, outcomes.py, and the
-   messages skill. VALIDATION.json describes the author's tests, not this host.
+1. Extract this candidate to a new persistent /workspace directory outside the
+   installed source and Beeper data. Verify SHA256SUMS, SOURCE-REVISION.txt and
+   .grok-plugin/plugin.json. The manifest and helper must report 0.7.6.
 
-2. From the candidate directory run the focused offline tests:
-   env -u BEEPER_PLUGIN_HOME -u BEEPER_READONLY PYTHONPATH=tests:skills/beeper/scripts python3 -m unittest test_outcomes.OutcomeTests -v
-   Respect host resource limits and serialize heavy jobs. These tests create
-   isolated synthetic data. There are 29 outcome tests. The optional five
-   published-CLI tests require an isolated prepared CLI and loopback receiver;
-   if unavailable, record them as untested/skipped, not passed. Do not download
-   or replace any binary just to repeat them. Use grok plugin validate if available.
+2. Read the root and setup skills and changed helper code. Run isolated offline
+   regressions from the extracted candidate directory:
+   env -u BEEPER_PLUGIN_HOME -u BEEPER_READONLY python3 -m unittest discover -s tests -v
+   Respect host resource limits. Fixtures simulate a fresh approved setup and
+   do not download binaries or contact accounts. Report optional official-CLI
+   skips and unavailable validators as such, not passes. VALIDATION.json records
+   the author's test environment, not this host.
 
-3. Recover the exact WhatsApp self-chat ID from the saved 0.7.4 write plan. Do not
-   search for or select a different chat. Recheck existing message 18720 only.
-   Set CANDIDATE to the extracted candidate's absolute directory and CHAT_ID to
-   that exact saved chat ID. Keep the established BEEPER_PLUGIN_HOME unchanged.
-   Inspect and run this code, which calls the observer directly: no send command
-   is dispatched. It makes one message GET, one scoped chat GET, and one account
-   list GET. Missing/unavailable evidence can stop it sooner. No CLI runs.
+3. Reuse the established BEEPER_PLUGIN_HOME and this candidate's absolute HELPER.
+   With BEEPER_READONLY=1 run only:
+   python3 "$HELPER" onboard
+   On the existing installation expect configured, approvalRequired false,
+   reuseAcrossDevices true, readinessChecked false, and the same data directory
+   and grok-bot target. This command only reads local installation files; it
+   launches no process and does not contact the API or write consent. A configured
+   result is not a claim that login or Server readiness was checked.
 
-   BEEPER_READONLY=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$CANDIDATE/skills/beeper/scripts" "$CHAT_ID" <<'CHECK'
-import json
-import sys
-sys.path.insert(0, sys.argv[1])
-from beeper import Runtime
-import outcomes
-outcomes.OBSERVATION_DELAYS = (0,)
-result = outcomes.observe(Runtime(), "react", sys.argv[2], {}, {"id": "18720", "reaction": "👍"})
-print(json.dumps({"observation": result}, ensure_ascii=False, indent=2))
-CHECK
+4. Run status once, then one messages list on the previously verified chat with
+   limit 1. Confirm the same CLI/Server identity and account/profile. Keep bodies
+   and credentials out of the report. Readiness initializing alone is not a
+   reason to install, update, reconnect, or sign in again. Stop on unexpected
+   identity/state instead of trying a different profile.
 
-   This rechecks present state. It does not overwrite or retroactively relabel
-   the saved 0.7.4 write outcome. If the reported reaction and identities are
-   unchanged, expect confirmed, chatSelfIdentityMatches true,
-   accountIdentityMatches false, reactionStateAvailable true, and readAttempts 1.
-   A missing bridgeSendStatus is still not evidence of failure. Confirmation
-   covers Server state; deliveryVerified remains false. If unknown, return the
-   observation as-is and stop; do not extend the loop or repeat the write.
+5. Return revision, exact test counts/skips, helper/manifest versions, onboard
+   state, whether a consent file was created/changed (it must not be), and the
+   bounded read result. Do not call setup, setup --approved, update, start,
+   signin, recovery, account changes, sends, reactions, deletes, or cleanup.
+   Do not destroy an existing installation to simulate the first-run case.
 
-4. Return the revision, focused-test counts, exact observation checks, and whether
-   the current matcher now recognizes the existing reaction. Keep identifiers
-   pseudonymized consistently in shared reports. No credentials, account lists,
-   unrelated message bodies, or raw transaction IDs belong in the report.
+Once the user proceeds with activation, follow GROK-ACTIVATE.txt. Register all
+five skills together through the supported Bot mechanism, and use this same
+onboarding flow by default. The existing installation should be reused; it
+should not ask to install software again. A fresh conversation on another device
+must discover the saved skills and use the same cloud data directory. That check
+is pending until actually performed. A native install-time callback has not been
+verified; first-use onboarding does not prove that callback exists.
 
-Do not resend, remove the reaction, delete the ping/reply, clean up old messages,
-resume the interrupted write plan, change chat settings, reconnect, or restart.
-Those actions are outside this read-only acceptance. Reaction removal/deletion,
-other untested features, and the fresh-session reports-skill evaluation remain
-untested live; do not claim a complete plugin acceptance from this narrow check.
-
-Do not install or reload this source during the check. Report that activation is
-still pending. Keep the old source and the current profile intact.
-
-If the user subsequently requests activation, follow GROK-ACTIVATE.txt. A Grok
-Build CLI installation does not by itself register skills in the Grok Bot app.
+Prior evidence: 0.7.5 recognized the existing own reaction using the chat member
+marked isSelf. This release retains that fix. Repeating its live send is not
+needed. Live reaction removal/deletion, fresh-session report evaluation, native
+skill registration, and real first-install UI behavior are separate acceptance
+items; a passed synthetic suite is not full plugin acceptance.

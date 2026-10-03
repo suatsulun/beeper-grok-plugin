@@ -1,6 +1,6 @@
 ---
 name: beeper
-description: Use Beeper in Grok. Set up Beeper, read or send messages on existing accounts, manage chats, and prepare inbox reports or exports.
+description: Onboard Beeper when installed or first used, ask before cloud installation, and reuse its messaging, chat, and report skills across devices on the same Grok account.
 ---
 
 # Beeper
@@ -9,9 +9,17 @@ Do the work on the user's **Grok cloud computer**. One persistent Beeper Server 
 
 Resolve `scripts/beeper.py` relative to this skill's installed directory. In all Beeper skills, `HELPER` means that absolute path. Use the existing Python 3.10+ runtime. Invoke it with an argument array, or quote shell arguments properly; message text must never become shell code.
 
-```sh
-python3 "$HELPER" status
-```
+## Default onboarding
+
+As part of plugin activation, or the first Beeper request if the host loads skills only on demand, run `python3 "$HELPER" onboard` on the account's Grok cloud computer. This inspects local files without downloading, starting processes, or modifying a profile. Do not require the user to know a setup command or repeat onboarding when changing devices. All five skills use this same entry point and profile.
+
+- `needs_approval`: present `approvalPrompt` before installing. Explain that CLI and Server will run on the shared Grok cloud computer and every device will reuse it. Installing the plugin alone is not consent to download software. Wait for the user's answer; if they decline, leave the installation untouched. If the user already explicitly approved this cloud installation, do not ask again.
+- After approval, follow [beeper-setup](../beeper-setup/SKILL.md) and run `setup --approved`. Approval is saved with that cloud profile so an interrupted setup can resume. Finish any required private Beeper sign-in and verification, then resume the original task.
+- `setup_incomplete`: permission was already saved for this profile. Resume `setup` without another prompt, unless the user has withdrawn permission. Read-only audits do not resume setup.
+- `configured`: reuse the existing CLI, Server target, and accounts. Do not ask to install, download an update, create a new profile, or require another login just because this is a new device or conversation. Use `status` to establish live access; if only Server stopped, resume the same target through the setup skill. Existing `initializing` readiness alone is not a reason to reinstall.
+- `repair_required`: preserve the existing profile and explain the specific missing/invalid state. Do not turn it into a fresh installation.
+
+Run onboarding once when activation/access is established, not before every message. A new conversation may check it again; the configured path is a cheap read-only check. Select the cloud executor explicitly. Never run this first-run installation on the user's PC or phone, and never install Grok Build to activate these skills. A native install-time callback is host-dependent; do not claim an automatic popup or saved registration unless observed.
 
 Read the relevant skill and carry out the request:
 
@@ -22,9 +30,9 @@ Read the relevant skill and carry out the request:
 | Find contacts, start a conversation, or organize chats | [beeper-chats](../beeper-chats/SKILL.md) |
 | Summaries, activity reports, unanswered messages, or exports | [beeper-reports](../beeper-reports/SKILL.md) |
 
-Use existing context. Don't ask users to choose commands, copy IDs, run terminals, or repeat a clear instruction. Ask only for missing details that affect the result, such as an ambiguous recipient. If setup is missing, perform it and then resume the original request.
+Use existing context. Don't ask users to choose commands, copy IDs, run terminals, or repeat a clear instruction. Ask only for missing details that affect the result, such as an ambiguous recipient, and the initial cloud-installation permission above.
 
-The helper uses `/workspace/.beeper-grok`, outside the plugin directory, and reuses the `grok-bot` production profile from earlier versions. `BEEPER_PLUGIN_HOME` is an override for development or an already established alternate location. Keep it consistent. No local browser, extension, Desktop app, or extra runtime is required.
+The helper uses `/workspace/.beeper-grok`, outside the plugin directory, and reuses the `grok-bot` production profile from earlier versions. It has no automatic per-device home-directory fallback. `BEEPER_PLUGIN_HOME` is an override for development or an already established alternate location. Keep it identical across all five skills; never derive it from a Bot, conversation, client hostname, or plugin version. No local browser, extension, Desktop app, or extra runtime is required.
 
 Run native Beeper commands through `python3 "$HELPER" cli ...`. This supplies the correct target and credentials and returns JSON. Use long options such as `--quiet` and `--output`; short options and clusters are rejected to prevent hidden target overrides. Use a command's `--help` when its flags are unclear. `cli man` lists the installed CLI's capabilities; its account-connection, raw API, reset, and Desktop workflows are outside this plugin. Capabilities also depend on the connected network and Server build.
 

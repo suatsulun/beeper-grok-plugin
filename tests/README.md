@@ -1,5 +1,9 @@
 # Validation
 
+## v0.7.6 onboarding regressions
+
+`test_onboarding.py` exercises missing-installation consent with zero pre-approval filesystem/process/network effects; a synthetic approved CLI/Server install; resumption after an interrupted install; another runtime reusing the same target; legacy account/profile preservation without a consent marker; stopped-versus-running Server behavior; consent scope/root matching; concurrent setup locks; repair checks before downloads; script entry-point output; a fixed cloud home independent of client home or working directory; and helper/manifest version alignment. Installer and network dependencies are synthetic. A passing fixture cannot prove that Grok Bot emits an install-time event, registers the five skills, or discovers them in a fresh conversation. Record those host checks separately.
+
 ## v0.7.5 reaction identity regressions
 
 The sanitized WhatsApp reproduction uses different account and chat self IDs. Tests check confirmation through the explicitly marked chat self, legacy account-ID matching, exact emoji keys, other people's reactions, wrong chat/account scope, contradictory self flags, missing/malformed state, delayed reactions with cached identity reads, and removal while either own identity still reacts. When the chat self is unavailable, an unmatched reaction with the requested key cannot establish removal. An empty valid reaction list can establish absence with a known account identity.

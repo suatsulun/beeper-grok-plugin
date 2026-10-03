@@ -20,8 +20,11 @@ import urllib.parse
 import urllib.request
 
 TARGET = "grok-bot"
-VERSION = "0.7.4"
+VERSION = "0.7.6"
 SETUP = "/v1/app/setup"
+INSTALL_SCOPE = "beeper-cloud-install-v1"
+INSTALL_PROMPT = ("May I install Beeper CLI and Beeper Server on your shared Grok cloud computer? "
+                  "All your devices will use this same setup. Nothing will be installed on your PC or phone.")
 
 
 class Failure(Exception):
@@ -101,8 +104,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class Runtime:
     def __init__(self, root=None):
         os.umask(0o077)
-        default = "/workspace/.beeper-grok" if Path("/workspace").is_dir() else "~/.local/share/beeper-grok-plugin"
-        self.root = Path(root or os.environ.get("BEEPER_PLUGIN_HOME", default)).expanduser().resolve()
+        # One account's cloud workspace, never a new home-directory installation
+        # selected just because a client device or working directory changed.
+        default = "/workspace/.beeper-grok"
+        self.root = Path(root or os.environ.get("BEEPER_PLUGIN_HOME") or default).expanduser().resolve()
         self.config = self.root / "config"
         self.binary = self.root / "bin/beeper"
         self.target_file = self.config / "targets" / f"{TARGET}.json"
@@ -226,10 +231,64 @@ class Runtime:
             result["setup"] = self.cli(["status"])
         return result
 
-    def setup(self, update=False):
+    def onboard(self):
+        """Inspect installation and consent without launching a process or writing."""
+        cli = self.binary.is_file()
+        target_exists = self.target_file.exists()
+        installed = read_json(self.config / "installations.json").get("server", {})
+        server = isinstance(installed, dict) and isinstance(installed.get("path"), str) and Path(installed["path"]).is_file()
+        result = {"pluginVersion": VERSION, "dataDirectory": str(self.root), "target": TARGET,
+                  "executionLocation": "Grok account's shared cloud computer",
+                  "reuseAcrossDevices": True, "cliInstalled": cli, "serverInstalled": server,
+                  "targetConfigured": target_exists, "approvalRequired": False,
+                  "readinessChecked": False, "actions": []}
+        reason = None
+        if target_exists:
+            try:
+                self.target()
+            except Failure as error:
+                reason = str(error)
+            if not cli or not server:
+                reason = "The existing target has missing installation files. Preserve its profile and inspect before repairing."
+        elif (self.config / "profiles/server" / TARGET).exists():
+            reason = "An existing profile has no target file. Restore its target; do not create another profile."
+        if installed and not server:
+            reason = "The saved Server executable is missing or invalid. Preserve the profile and inspect before repairing."
+        if reason:
+            return {**result, "state": "repair_required", "reason": reason, "nextAction": "inspect_existing_installation"}
+        if cli and server and target_exists:
+            return {**result, "state": "configured", "nextAction": "status",
+                    "note": "Reuse the existing installation. This local check does not establish sign-in or live Server readiness."}
+        consent = read_json(self.root / "setup-consent.json")
+        approved = (isinstance(consent, dict) and consent.get("approved") is True
+                    and consent.get("scope") == INSTALL_SCOPE and consent.get("dataDirectory") == str(self.root)
+                    and consent.get("target") == TARGET)
+        actions = (["install_official_cli"] if not cli else []) + (["install_official_server"] if not server else [])
+        if not target_exists:
+            actions.append("create_cloud_target")
+        actions.append("start_server")
+        return {**result, "state": "setup_incomplete" if approved else "needs_approval",
+                "approvalRequired": not approved, "approvalPrompt": None if approved else INSTALL_PROMPT,
+                "actions": actions, "nextAction": "setup" if approved else "await_user_approval"}
+
+    def setup(self, update=False, approved=False):
         self.writable()
         from install import install_cli, latest
+
+        def preflight():
+            plan = self.onboard()
+            if plan["state"] == "repair_required":
+                raise Failure(plan["reason"], "setup_requires_repair")
+            if plan["approvalRequired"] and not approved:
+                raise Failure("Cloud installation needs your approval. Run onboard to see the plan; use setup --approved only after consent.", "approval_required")
+            return plan
+
+        preflight()  # No directory, lock, download, or process before approval.
         with self.lock():
+            plan = preflight()  # Another conversation may have finished setup.
+            if approved and plan["state"] != "configured":
+                write_json(self.root / "setup-consent.json", {"approved": True, "scope": INSTALL_SCOPE,
+                           "dataDirectory": str(self.root), "target": TARGET, "approvedAt": time.time()})
             release = None
             if not self.binary.exists() or update:
                 release = latest(self.root)
@@ -256,7 +315,7 @@ class Runtime:
                 check = self.cli(["update", "--server", "--check"])
                 if any(item.get("available") for item in check):
                     backup = self.update_server(installed)
-            if backup is None:
+            if backup is None and not self.server_running():
                 self.cli(["targets", "start", TARGET])
         return {"backup": backup, "cliRelease": release, "status": self.status()}
 
@@ -434,7 +493,9 @@ class Runtime:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("setup", "update", "status", "start", "check-updates", "signin", "recovery"):
+    setup = actions.add_parser("setup")
+    setup.add_argument("--approved", action="store_true", help="Use only after the user approves installation on the Grok cloud computer")
+    for name in ("onboard", "update", "status", "start", "check-updates", "signin", "recovery"):
         actions.add_parser(name)
     cli = actions.add_parser("cli", help="Run a native Beeper messaging command")
     cli.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -448,7 +509,9 @@ def main():
     runtime = Runtime()
     try:
         if args.action in ("setup", "update"):
-            data = runtime.setup(update=args.action == "update")
+            data = runtime.setup(update=args.action == "update", approved=getattr(args, "approved", False))
+        elif args.action == "onboard":
+            data = runtime.onboard()
         elif args.action == "status":
             data = runtime.status()
         elif args.action == "start":

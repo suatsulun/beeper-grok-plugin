@@ -1,6 +1,8 @@
 # Beeper for Grok
 
-Say **“Set up Beeper.”** Grok installs Beeper CLI and Server on its cloud computer, helps you sign in to your existing Beeper account, and uses the chat accounts already connected there. The same cloud setup is available when you use your Grok account from another device.
+**Install the plugin, approve one cloud setup, and use Beeper from every device on your Grok account.** On activation or first use, Grok checks the shared cloud installation. If it is missing, Grok asks permission before installing Beeper CLI and Server, then helps you sign in to your existing Beeper account. If it already exists, Grok reuses its connected accounts. You do not need to learn or request a separate setup command.
+
+Your PC and phone are interfaces to that same account-owned cloud computer. The plugin, five skills, and account profile are not reinstalled per device or conversation. The plugin supplies the onboarding flow; automatic execution at the instant of marketplace installation requires a host install callback, which has not been verified for Grok Bot. Where skills load on demand, the first Beeper request starts this same flow.
 
 Sign in with your Beeper email code, then approve the session on a trusted Beeper device or use your existing recovery key. Codes and keys go into a private browser page on Grok's computer. The plugin needs Grok's private browser takeover for those steps; it never asks for secrets in chat. It does not require changes to your PC or Chrome.
 
@@ -17,7 +19,7 @@ This version deliberately covers **existing accounts**. Adding networks, provide
 
 ## What's inside
 
-Five skills: Beeper routing, setup, messages, chats, and reports. Seven Python standard-library modules install the official CLI, preserve one cloud profile, provide private sign-in, and repair specific messaging compatibility issues. Native CLI commands remain available through the helper; bounded history, search, and contact-detail reads use the authenticated loopback API directly. No JavaScript browser stack, MCP service, package dependencies, or install hooks.
+Five skills: Beeper routing, setup, messages, chats, and reports. Seven Python standard-library modules install the official CLI, preserve one cloud profile, provide private sign-in, and repair specific messaging compatibility issues. Native CLI commands remain available through the helper; bounded history, search, and contact-detail reads use the authenticated loopback API directly. No JavaScript browser stack, MCP service, package dependencies, or unattended install hooks.
 
 Data stays outside the plugin at `/workspace/.beeper-grok`. Existing `grok-bot` profiles from the 0.6.x plugin are reused. Updating this source alone does not change Server or sign anyone out. “Update Beeper” checks official releases, keeps the old CLI, backs up a stopped Server's profile and program, and runs the official updater. It never patches Beeper binaries or resets account data.
 
@@ -29,13 +31,19 @@ As checked on **28 September 2026**, the latest published CLI is **0.6.2**. The 
 
 ## Install and development
 
-### v0.7.5 reaction identity fix — candidate
+### v0.7.6 shared cloud onboarding — candidate
+
+- Activation/first use checks `onboard`, a read-only local installation plan. New installations require consent before downloads or filesystem changes. `setup --approved` records that consent and installs official CLI and Server; an interrupted installation can resume without a second prompt.
+- Every skill uses the same `/workspace/.beeper-grok` home and `grok-bot` target. There is no automatic local-home fallback. Older installations and their account state are reused without another installation prompt, and an already-running Server is not started again. Missing files associated with an existing profile stop for repair before downloads.
+- Helper and manifest now report the same version; a regression test checks they stay aligned. The remaining host acceptance checks are saved-skill discovery and onboarding invocation on activation/first use. The source alone cannot register itself in Grok Bot or create an unsupported install-time callback.
+
+### v0.7.5 reaction identity fix
 
 - WhatsApp acceptance found an own reaction whose `participantID` matched the chat member marked `isSelf`, but differed from the account's `user.id`. The reaction was visible on the phone; the 0.7.4 matcher still returned `unknown`. This was an identity comparison defect, not evidence that opening the phone was required.
 - Reaction observation now checks both exact identities, with chat/account scope validation. It never infers identity from names, phone numbers, or ID suffixes. Boolean `checks` show whether the account or chat identity matched, without exposing participant identifiers.
 - Removal remains unconfirmed while either own identity still has the requested reaction. Missing/malformed state, conflicting identity evidence, and an unresolved possible self reaction stay unknown. Chat and account reads are cached within the existing observation deadline; the write is never repeated.
 
-This is a source candidate until the exact revision passes live acceptance and is installed/reloaded on Grok. Tests and a source archive do not activate a plugin. Existing-account scope is unchanged: this version does not add the earlier PC-browser provider-cookie login flow. See [the acceptance handoff](GROK-TEST.txt) for rechecking the existing reaction without sending another one or resetting the working account.
+The 0.7.5 matcher was verified against the already-present WhatsApp reaction using one message, chat, and account read. That check does not establish live removal/deletion or full plugin acceptance. Existing-account scope is unchanged: this version does not add the earlier PC-browser provider-cookie login flow. See [the acceptance handoff](GROK-TEST.txt) for checking the current candidate without resetting the working account.
 
 ### v0.7.4 review fixes
 
@@ -61,9 +69,9 @@ The API contract is documented by [Beeper's message endpoint](https://developers
 
 This source has `.grok-plugin/plugin.json` and `skills/`. **Grok Bot and Grok Build have different activation mechanisms.** A verified ZIP and successful helper calls establish that the code works on the computer; they do not register skills for future sessions.
 
-For **Grok Bot**, use the app's native skill management if available. [The Bot documentation](https://docs.x.ai/grok-bot/skills-routines-and-automations) describes saving private skills and checking them under Marketplace → Your plugins → Manage plugins and skills. Update existing Beeper skills instead of creating duplicates. Retain the verified source directory, preserve the links among its five skills, and make helper references resolve to that exact source. Private skills can be shared across Bots; this does not establish that the helper files or Beeper profile exist on another computer. If the native mechanism cannot save these instructions or references, report that limitation and leave persistent activation pending. See [the activation handoff](GROK-ACTIVATE.txt).
+For **Grok Bot**, register/update the bundled five skills together using the app's supported plugin or native skill management, and start the main skill's onboarding flow as part of activation. This is installer work; users should not have to copy skills or run helper commands individually. [The Bot documentation](https://docs.x.ai/grok-bot/skills-routines-and-automations) describes saving private skills and checking them under Marketplace → Your plugins → Manage plugins and skills. Update existing Beeper entries instead of creating duplicates. Retain the source directory and preserve the links among its skills and helper. The [shared cloud computer](https://docs.x.ai/grok-bot/computer-and-apps) belongs to the account; changing your PC or phone does not create another cloud home. If the host cannot register the bundle or invoke onboarding at installation, report the exact limitation; first use runs the same onboarding flow once skills are available. See [the activation handoff](GROK-ACTIVATE.txt).
 
-For **Grok Build development**, the [CLI supports](https://docs.x.ai/build/cli/reference) `grok plugin install /absolute/path/to/project`; follow its displayed trust and reload requirements. This registers the plugin in that Build environment. Do not install or search the whole cloud computer for Grok Build just to activate a Bot skill. Distribution through a marketplace is a separate process requiring catalog review and a published source revision. Beeper binaries are downloaded only when the user asks to set up or update Beeper.
+For **Grok Build development**, the [CLI supports](https://docs.x.ai/build/cli/reference) `grok plugin install /absolute/path/to/project`; follow its displayed trust and reload requirements. This registers the plugin in that Build environment, not the user's Bot account. Do not install or search the whole cloud computer for Grok Build to activate Bot skills. Distribution through a marketplace is a separate process requiring catalog review and a published source revision. Beeper binaries are downloaded after the user approves cloud onboarding or explicitly requests an update.
 
 Grok's Linux cloud computer needs its existing Python 3.10+ runtime, internet access to official Beeper/GitHub downloads, and private browser takeover for sign-in. Automatic CLI installation supports x64 and arm64. No npm, pip, Node, or browser installation is needed.
 
