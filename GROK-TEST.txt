@@ -58,3 +58,6 @@ untested live; do not claim a complete plugin acceptance from this narrow check.
 
 Do not install or reload this source during the check. Report that activation is
 still pending. Keep the old source and the current profile intact.
+
+If the user subsequently requests activation, follow GROK-ACTIVATE.txt. A Grok
+Build CLI installation does not by itself register skills in the Grok Bot app.

@@ -1,0 +1,52 @@
+Beeper 0.7.5 — Grok Bot activation after the successful reaction check
+
+Stop searching for the grok executable or a public Beeper marketplace entry.
+The README's grok plugin install command applies to Grok Build. Do not install
+Grok Build to solve Bot activation. The Beeper helper already ran successfully
+on this cloud computer.
+
+Use the existing tested 0.7.5 source, revision
+4d4d83391010ea04fed036132c6a9480697b7c3f. This handoff corrects activation
+instructions; it does not require another ZIP, new runtime code, or a retest of
+the reaction. Keep the verified source at its current persistent absolute path.
+
+Inspect the Bot's available native private-skill management and existing Beeper
+skill registrations. If supported, update the existing entries from the tested
+source instead of creating duplicates. The five source skills are beeper,
+beeper-setup, beeper-messages, beeper-chats, and beeper-reports.
+
+Preserve the instructions and links among the skills. In a saved skill, relative
+paths must still resolve to the verified source files. If the native skill format
+does not preserve the source directory, use explicit absolute paths to its
+SKILL.md files and skills/beeper/scripts/beeper.py. Do not leave a skill pointing
+at an older helper. Keep the established BEEPER_PLUGIN_HOME unchanged. Do not
+embed profile contents, account credentials, recovery keys, or message bodies in
+saved skills. A shared skill library does not make local files or profiles
+available on another computer; report a missing path instead of claiming access.
+
+Read back the saved registration or its metadata and report which skill entries
+were updated, the source revision, and the resolved helper path. Then run one
+read-only messages list on the previously verified chat with limit 1. Do not
+print the message body in the activation report. This confirms helper access in
+this session; it does not prove fresh-session skill discovery.
+
+If native private-skill saving is unavailable, stop and state the exact missing
+capability or user interface action. Do not edit guessed internal app files,
+perform a system-wide executable search, or call manual helper execution an
+installed plugin. You may still use the verified helper explicitly in this
+conversation, but report persistent activation as pending.
+
+The official Bot documentation describes the management screen as:
+Marketplace → Your plugins → Manage plugins and skills → Private skills.
+https://docs.x.ai/grok-bot/skills-routines-and-automations
+That screen is for saved skills; absence from the public marketplace is a
+different issue. Do not assume that uploading a ZIP registers a plugin.
+
+Keep CLI, Server, process, profile, and accounts unchanged. Do not run setup,
+update, sign-in, reconnect, restart, another send, reaction removal, deletion,
+or cleanup. Do not resume the interrupted write plan.
+
+After saving is confirmed, the user can start a fresh Bot conversation and ask
+it to use Beeper for one read-only check. Confirm that it discovers the saved
+skill and uses the pinned helper before treating fresh-session activation as
+verified. Do not claim a full feature acceptance from an activation check.

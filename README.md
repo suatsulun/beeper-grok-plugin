@@ -59,7 +59,11 @@ The API contract is documented by [Beeper's message endpoint](https://developers
 
 ### Installing the plugin source
 
-This is a Grok plugin with `.grok-plugin/plugin.json` and `skills/`. For local development, Grok's CLI accepts `grok plugin install /absolute/path/to/project`. Distribution through a marketplace requires its own review and a published source revision; this local rewrite is not a marketplace release. Plugin installation itself is passive. Official binaries are downloaded only when the user asks Grok to set up or update Beeper.
+This source has `.grok-plugin/plugin.json` and `skills/`. **Grok Bot and Grok Build have different activation mechanisms.** A verified ZIP and successful helper calls establish that the code works on the computer; they do not register skills for future sessions.
+
+For **Grok Bot**, use the app's native skill management if available. [The Bot documentation](https://docs.x.ai/grok-bot/skills-routines-and-automations) describes saving private skills and checking them under Marketplace → Your plugins → Manage plugins and skills. Update existing Beeper skills instead of creating duplicates. Retain the verified source directory, preserve the links among its five skills, and make helper references resolve to that exact source. Private skills can be shared across Bots; this does not establish that the helper files or Beeper profile exist on another computer. If the native mechanism cannot save these instructions or references, report that limitation and leave persistent activation pending. See [the activation handoff](GROK-ACTIVATE.txt).
+
+For **Grok Build development**, the [CLI supports](https://docs.x.ai/build/cli/reference) `grok plugin install /absolute/path/to/project`; follow its displayed trust and reload requirements. This registers the plugin in that Build environment. Do not install or search the whole cloud computer for Grok Build just to activate a Bot skill. Distribution through a marketplace is a separate process requiring catalog review and a published source revision. Beeper binaries are downloaded only when the user asks to set up or update Beeper.
 
 Grok's Linux cloud computer needs its existing Python 3.10+ runtime, internet access to official Beeper/GitHub downloads, and private browser takeover for sign-in. Automatic CLI installation supports x64 and arm64. No npm, pip, Node, or browser installation is needed.
 
