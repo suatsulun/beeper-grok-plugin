@@ -124,6 +124,7 @@ def observe(runtime, operation, chat, data, expected):
     deadline = time.monotonic() + OBSERVATION_SECONDS
     attempts = 0
     accounts_cache = None
+    chat_cache = None
     last = observation("unknown", "Read-back has not established the effect.", chatID=chat, messageID=ident)
 
     def get(path):
@@ -138,6 +139,12 @@ def observe(runtime, operation, chat, data, expected):
             accounts_cache = get("/v1/accounts")
         return accounts_cache
 
+    def chat_details():
+        nonlocal chat_cache
+        if chat_cache is None:
+            chat_cache = get("/v1/chats/" + quote(chat, safe=""))
+        return chat_cache
+
     for delay in OBSERVATION_DELAYS:
         if time.monotonic() + delay >= deadline:
             break
@@ -146,7 +153,7 @@ def observe(runtime, operation, chat, data, expected):
         attempts += 1
         try:
             row = get("/v1/chats/" + quote(chat, safe="") + "/messages/" + quote(ident, safe=""))
-            last, retry = assess(operation, chat, known_final_id, row, expected, accounts)
+            last, retry = assess(operation, chat, known_final_id, row, expected, accounts, chat_details)
         except Failure as error:
             last = observation("unknown", "Read-back was unavailable after the write. No write was repeated.",
                                chatID=chat, messageID=ident, readErrorCode=error.code)
@@ -165,7 +172,57 @@ def text_matches(actual, expected):
     return isinstance(actual, str) and actual.replace("\r\n", "\n") == expected.replace("\r\n", "\n")
 
 
-def assess(operation, chat, known_final_id, row, expected, accounts):
+def assess_reaction(operation, chat, row, expected, accounts, chat_details, details):
+    # Network account IDs and room participant IDs can represent the same self
+    # with different strings. Only explicit, scoped identity evidence is used.
+    current = chat_details()
+    account_id = row.get("accountID")
+    if (not isinstance(account_id, str) or not account_id or not isinstance(current, dict)
+            or current.get("id") != chat or current.get("accountID") != account_id):
+        return observation("unknown", "Reaction identity lookup returned a different or unidentified chat/account.",
+                           scopeMismatch=True, **details), False
+    participants = current.get("participants")
+    members = participants.get("items") if isinstance(participants, dict) else None
+    if not isinstance(members, list) or any(not isinstance(member, dict) for member in members):
+        return observation("unknown", "Chat participant identity data is unavailable.", **details), True
+    self_ids = {member["id"] for member in members if member.get("isSelf") is True
+                and isinstance(member.get("id"), str) and member["id"]}
+    other_ids = {member["id"] for member in members if member.get("isSelf") is False
+                 and isinstance(member.get("id"), str) and member["id"]}
+    listed = accounts()
+    listed = listed.get("items", []) if isinstance(listed, dict) else listed
+    selected = [a for a in listed if isinstance(a, dict) and a.get("accountID", a.get("id")) == account_id] if isinstance(listed, list) else []
+    user = selected[0].get("user") if len(selected) == 1 else None
+    actor = user.get("id") if isinstance(user, dict) and user.get("isSelf") is not False else None
+    account_ids = {actor} if isinstance(actor, str) and actor else set()
+    if (self_ids | account_ids) & other_ids:
+        return observation("unknown", "Reaction identity evidence conflicts with a participant marked as someone else.", **details), False
+
+    identities = self_ids | account_ids
+    reactions = row.get("reactions")
+    available = isinstance(reactions, list) and all(
+        isinstance(r, dict) and isinstance(r.get("participantID"), str) and bool(r["participantID"])
+        and isinstance(r.get("reactionKey"), str) and bool(r["reactionKey"]) for r in reactions)
+    checks = {"accountIdentityAvailable": bool(account_ids), "chatSelfIdentityAvailable": bool(self_ids),
+              "reactionStateAvailable": available}
+    if not identities or not available:
+        return observation("unknown", "Own reaction identity or reaction state is unavailable.", checks=checks, **details), True
+    same_key = [r for r in reactions if r["reactionKey"] == expected.get("reaction")]
+    account_match = any(r["participantID"] in account_ids for r in same_key)
+    self_match = any(r["participantID"] in self_ids for r in same_key)
+    present = account_match or self_match
+    checks.update(accountIdentityMatches=account_match, chatSelfIdentityMatches=self_match, ownReactionPresent=present)
+    # Without a room self identity, a differing ID with the same key might still
+    # be ours. Never confirm removal merely because the account ID did not match.
+    if operation == "unreact" and not present and same_key and not self_ids:
+        return observation("unknown", "Removal cannot be confirmed without the chat's self identity.", checks=checks, **details), True
+    matched = present if operation == "react" else not present
+    return observation("confirmed" if matched else "unknown",
+                       "Own reaction state observed." if matched else "Own reaction state does not yet match.",
+                       checks=checks, **details), not matched
+
+
+def assess(operation, chat, known_final_id, row, expected, accounts, chat_details):
     sending = operation in {"text", "file", "voice", "sticker"}
     if not isinstance(row, dict) or row.get("chatID") != chat or not isinstance(row.get("id"), str) or not row["id"]:
         return observation("unknown", "Read-back did not identify a message in the requested chat. Resolve merged chats to a network member.",
@@ -188,16 +245,7 @@ def assess(operation, chat, known_final_id, row, expected, accounts):
     if row.get("isDeleted") or row.get("isHidden"):
         return observation("unknown", "Message is deleted or hidden; requested content cannot be confirmed.", **details), False
     if operation in {"react", "unreact"}:
-        listed = accounts()
-        listed = listed.get("items", []) if isinstance(listed, dict) else listed
-        account = next((a for a in listed if a.get("accountID", a.get("id")) == row.get("accountID")), {})
-        actor = (account.get("user") or {}).get("id")
-        reactions = row.get("reactions")
-        if not actor or not isinstance(reactions, list):
-            return observation("unknown", "Own reaction identity or reaction state is unavailable.", **details), True
-        present = any(r.get("participantID") == actor and r.get("reactionKey") == expected.get("reaction") for r in reactions)
-        matched = present if operation == "react" else not present
-        return observation("confirmed" if matched else "unknown", "Own reaction state observed." if matched else "Own reaction state does not yet match.", **details), not matched
+        return assess_reaction(operation, chat, row, expected, accounts, chat_details, details)
     checks = {"ownMessage": row.get("isSender") is True}
     if expected.get("message") is not None:
         checks["textMatches"] = text_matches(row.get("text"), expected["message"])

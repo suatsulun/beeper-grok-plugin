@@ -636,6 +636,7 @@ class PublishedCLITests(RuntimeFixture):
 
             do_POST = do_GET
             do_PUT = do_GET
+            do_DELETE = do_GET
 
         self.receiver = HTTPServer(("127.0.0.1", 0), Receiver)
         thread = threading.Thread(target=self.receiver.serve_forever, daemon=True)
@@ -717,6 +718,33 @@ class PublishedCLITests(RuntimeFixture):
         self.assertEqual(result["writeOutcome"]["state"], "confirmed")
         self.assertEqual(len(reads), 2)
         self.assertEqual(len([r for r in self.request_bodies if r[0] == "PUT"]), 1)
+
+    def test_react_and_unreact_with_distinct_account_and_chat_self_ids(self):
+        self.point_primary_at_receiver()
+        chat = "!self:synthetic"
+        reactions = []
+
+        def respond(method, path, body):
+            if method == "POST" and path.endswith("/reactions"):
+                reactions.append({"id": "room-self", "participantID": "room-self", "reactionKey": body["reactionKey"]})
+                return {"chatID": chat, "messageID": "final", "reactionKey": body["reactionKey"], "success": True, "transactionID": "synthetic"}
+            if method == "DELETE" and "/reactions/" in path:
+                reactions.clear()
+                return {"chatID": chat, "messageID": "final", "reactionKey": "👍", "success": True}
+            if path == "/v1/accounts":
+                return [{"accountID": "network", "user": {"id": "account-self", "isSelf": True}}]
+            if method == "GET" and "/messages/" in path:
+                return {"id": "final", "chatID": chat, "accountID": "network", "reactions": reactions}
+            return {"id": chat, "accountID": "network", "participants": {
+                "items": [{"id": "room-self", "isSelf": True}], "hasMore": False, "total": 1}}
+
+        self.respond = respond
+        for operation in ("react", "unreact"):
+            result = self.runtime.command(["send", operation, "--to", chat, "--id", "final", "--reaction", "👍"])
+            self.assertEqual(result["writeOutcome"]["state"], "confirmed")
+            self.assertEqual(result["writeOutcome"]["checks"]["chatSelfIdentityMatches"], operation == "react")
+            self.assertFalse(result["writeOutcome"]["checks"]["accountIdentityMatches"])
+        self.assertEqual([method for method, _, _ in self.received if method != "GET"], ["POST", "DELETE"])
 
 
 class Response(io.BytesIO):

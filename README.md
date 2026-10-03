@@ -29,14 +29,20 @@ As checked on **28 September 2026**, the latest published CLI is **0.6.2**. The 
 
 ## Install and development
 
-### v0.7.4 review fixes — candidate
+### v0.7.5 reaction identity fix — candidate
+
+- WhatsApp acceptance found an own reaction whose `participantID` matched the chat member marked `isSelf`, but differed from the account's `user.id`. The reaction was visible on the phone; the 0.7.4 matcher still returned `unknown`. This was an identity comparison defect, not evidence that opening the phone was required.
+- Reaction observation now checks both exact identities, with chat/account scope validation. It never infers identity from names, phone numbers, or ID suffixes. Boolean `checks` show whether the account or chat identity matched, without exposing participant identifiers.
+- Removal remains unconfirmed while either own identity still has the requested reaction. Missing/malformed state, conflicting identity evidence, and an unresolved possible self reaction stay unknown. Chat and account reads are cached within the existing observation deadline; the write is never repeated.
+
+This is a source candidate until the exact revision passes live acceptance and is installed/reloaded on Grok. Tests and a source archive do not activate a plugin. Existing-account scope is unchanged: this version does not add the earlier PC-browser provider-cookie login flow. See [the acceptance handoff](GROK-TEST.txt) for rechecking the existing reaction without sending another one or resetting the working account.
+
+### v0.7.4 review fixes
 
 - Contact IDs are exact and case-sensitive, including with an original `--query` hint. A colliding name/phone/handle cannot substitute for the requested person. Name/phone/handle lookup remains available through explicit `--by-label`; multiple matches require disambiguation.
 - Message writes execute once. An immediate read can finish quickly; pending/stale effects receive up to three read-only rechecks within an eight-second observation budget. Results keep message IDs, attempt counts, content evidence, bridge status, and receipt limitations separate. Missing optional `sendStatus` does not prevent confirmation of matching Server content.
 - Message search uses whole-second API queries widened around the requested timezone-aware dates, then filters the exact fractional-second boundaries locally. `--after` and `--before` are inclusive; `--before-exclusive` supports daily `[start, next midnight)` windows. Results are now `{items, coverage}` inside `data`, including effective filters, index exhaustion, and truncation. Search includes low-priority and muted chats unless explicitly excluded.
 - Write argument parsing understands option arity, repeated mentions, and literal values that look like flags. The official CLI rejects some flag-like text values, so those text sends/edits use one JSON API write selected before dispatch. Target overrides remain blocked. Rich text is never flattened to fabricate a match; differing Server representations remain explicitly unverified. Merged-chat scope mismatches stop safely; select an explicit network member chat.
-
-This is a source candidate until the exact revision passes live acceptance and is installed/reloaded on Grok. Tests and a source archive do not activate a plugin. Existing-account scope is unchanged: this version does not add the earlier PC-browser provider-cookie login flow. See [the acceptance handoff](GROK-TEST.txt) for testing without resetting the working account.
 
 ### v0.7.3 audit fixes
 

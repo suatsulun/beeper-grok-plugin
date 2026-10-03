@@ -1,79 +1,60 @@
-Beeper Grok plugin 0.7.4 — candidate acceptance
+Beeper Grok plugin 0.7.5 — reaction identity acceptance
 
-Use the attached plugin source to test the audit fixes. Preserve the current
-official CLI, running Server, target, and account/profile. This source update
-does not require setup, sign-in, a Server update, or a binary patch.
+This candidate fixes the confirmed 0.7.4 own-reaction identity mismatch. It does
+not need another send, a CLI/Server update, an account change, or the whole live
+0.7.4 audit again. Keep the current installed plugin, CLI, Server process,
+BEEPER_PLUGIN_HOME, target, profile, and accounts unchanged during this check.
 
-1. Extract the archive to a new persistent directory on Grok's cloud computer,
-   outside the existing plugin and Beeper profile. Read README.md and the five
-   SKILL.md files. Use this candidate's absolute helper path. Keep the established
-   BEEPER_PLUGIN_HOME unchanged. Record version 0.7.4 and the supplied hashes.
+1. Extract the candidate archive into a new persistent directory outside the
+   existing plugin and profile. Verify SHA256SUMS, SOURCE-REVISION.txt and version
+   0.7.5 in .grok-plugin/plugin.json. Read the changed README, outcomes.py, and the
+   messages skill. VALIDATION.json describes the author's tests, not this host.
 
-2. Inspect and run the isolated offline suite from the extracted plugin directory:
-   env -u BEEPER_PLUGIN_HOME -u BEEPER_READONLY python3 -m unittest discover -s tests -v
-   Tests create their own synthetic profiles and do not contact an account.
-   Respect the host's resource limits; do not run concurrent heavy jobs. If grok
-   plugin validate is available, run it. Report unavailable validators and
-   optional official-CLI skips explicitly, not as passes.
+2. From the candidate directory run the focused offline tests:
+   env -u BEEPER_PLUGIN_HOME -u BEEPER_READONLY PYTHONPATH=tests:skills/beeper/scripts python3 -m unittest test_outcomes.OutcomeTests -v
+   Respect host resource limits and serialize heavy jobs. These tests create
+   isolated synthetic data. There are 29 outcome tests. The optional five
+   published-CLI tests require an isolated prepared CLI and loopback receiver;
+   if unavailable, record them as untested/skipped, not passed. Do not download
+   or replace any binary just to repeat them. Use grok plugin validate if available.
 
-3. For live diagnostics set BEEPER_READONLY=1. Reuse the same target and known
-   chat from the October 3 audit. Run status once, then:
-   - Read 20 newest messages.
-   - Request 20 older messages using the last returned message ID.
-   - Compare that boundary against a small dated search window. Use IDs and
-     timestamps as evidence; keep message bodies out of diagnostic artifacts.
-     Search now returns data.items and data.coverage. Try equivalent .000Z and Z
-     bounds, a nonzero fractional boundary if available, and an exact inclusive
-     --before boundary. Use --before-exclusive for next-midnight report ends.
-     Do not remove fractions, widen dates manually, or silently use native search.
-     Include --no-exclude-low-priority --include-muted for all-chat scope and
-     report effective filters and limitReached/sourceExhausted.
-   - Check context of a message inside the first page against neighbors on that
-     page. Each side is nearest first. Equal timestamps retain server order.
-   - Verify no duplicates, correct account/chat, chronology, and no skipped known
-     neighbors. An empty result or a budget error is not proof of completeness.
-   - Recheck one contact from search with contacts show ID --account ACCOUNT_ID.
-     If the network cannot resolve the ID, add --query ORIGINAL_SEARCH_TEXT.
-     The returned ID must match exactly. --by-label is only for an intentional
-     name/phone/handle lookup, not a fallback for an unresolved ID. Do not pick
-     another contact or broaden account scope silently.
-   - If verification is idle, an optional verify show must not create/change its
-     comparison file. Do not start verification or display/cache an active SAS
-     in this read-only acceptance pass.
+3. Recover the exact WhatsApp self-chat ID from the saved 0.7.4 write plan. Do not
+   search for or select a different chat. Recheck existing message 18720 only.
+   Set CANDIDATE to the extracted candidate's absolute directory and CHAT_ID to
+   that exact saved chat ID. Keep the established BEEPER_PLUGIN_HOME unchanged.
+   Inspect and run this code, which calls the observer directly: no send command
+   is dispatched. It makes one message GET, one scoped chat GET, and one account
+   list GET. Missing/unavailable evidence can stop it sooner. No CLI runs.
 
-4. Time one known-chat read: first call plus five sequential repeats. Report
-   result counts, median/range, and total helper wall time. Do not claim a CLI,
-   API, or model-time breakdown unless separately measured. Deep history anchors
-   require more requests than a newest-page read.
+   BEEPER_READONLY=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$CANDIDATE/skills/beeper/scripts" "$CHAT_ID" <<'CHECK'
+import json
+import sys
+sys.path.insert(0, sys.argv[1])
+from beeper import Runtime
+import outcomes
+outcomes.OBSERVATION_DELAYS = (0,)
+result = outcomes.observe(Runtime(), "react", sys.argv[2], {}, {"id": "18720", "reaction": "👍"})
+print(json.dumps({"observation": result}, ensure_ascii=False, indent=2))
+CHECK
 
-5. Return a concise pass/fail/blocked matrix with sanitized evidence. Include the
-   exact installed CLI/Server versions and state any differences from the earlier
-   audit. Stop on a cursor/order error; do not bypass the helper or fall back to
-   native broken cursor handling. No sends, edits, reactions, deletions, typing,
-   exports, downloads, chat changes, setup, update, or profile manipulation are
-   authorized by this acceptance prompt. Cleanup is also a write.
+   This rechecks present state. It does not overwrite or retroactively relabel
+   the saved 0.7.4 write outcome. If the reported reaction and identities are
+   unchanged, expect confirmed, chatSelfIdentityMatches true,
+   accountIdentityMatches false, reactionStateAvailable true, and readAttempts 1.
+   A missing bridgeSendStatus is still not evidence of failure. Confirmation
+   covers Server state; deliveryVerified remains false. If unknown, return the
+   observation as-is and stop; do not extend the loop or repeat the write.
 
-6. After this read-only acceptance, present a concrete, separate live-write plan
-   for the user's approval, using only their verified self-chat and exact test
-   content. Observe writeOutcome rather than treating exit success as confirmation.
-   Check text, author, reply linkage, edited body, own reaction, and deletion
-   markers. Record readAttempts, observationExhausted and bridgeSendStatus.
-   Missing optional bridge status is not a failure when requested content was
-   observed. Unknown is not proof the write failed; stop dependent writes and
-   reconcile by the returned ID. The helper already performs bounded GET-only
-   rechecks. Never retry an unknown send blindly. Do not erase audit evidence or
-   promise that a deletion removed remote copies. Capture original settings before
-   any authorized reversible changes and restore those exact values.
+4. Return the revision, focused-test counts, exact observation checks, and whether
+   the current matcher now recognizes the existing reaction. Keep identifiers
+   pseudonymized consistently in shared reports. No credentials, account lists,
+   unrelated message bodies, or raw transaction IDs belong in the report.
 
-7. For report/routing evaluation in a fresh Grok session, use only
-   tests/report-evaluation/prompt.txt and transcript.json with the relevant skill.
-   Do not show rubric.txt to the model until its answer is saved. This exercise
-   permits no live Beeper calls or changes. Record freshness, revision, loaded
-   skill paths, whether expected answers were visible, and the actual answer.
-   Score afterward against rubric.txt; do not count a custom Python summary as
-   a model evaluation. Report this step as untested if no fresh session was run.
+Do not resend, remove the reaction, delete the ping/reply, clean up old messages,
+resume the interrupted write plan, change chat settings, reconnect, or restart.
+Those actions are outside this read-only acceptance. Reaction removal/deletion,
+other untested features, and the fresh-session reports-skill evaluation remain
+untested live; do not claim a complete plugin acceptance from this narrow check.
 
-Only after acceptance, use Grok's supported plugin install/reload mechanism to
-activate this source for later sessions. Keep the old source available for source
-rollback; do not roll back Server binaries or databases. If the current Grok UI
-cannot reload a plugin, explain that limitation instead of claiming it is active.
+Do not install or reload this source during the check. Report that activation is
+still pending. Keep the old source and the current profile intact.

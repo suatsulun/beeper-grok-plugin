@@ -1,5 +1,11 @@
 # Validation
 
+## v0.7.5 reaction identity regressions
+
+The sanitized WhatsApp reproduction uses different account and chat self IDs. Tests check confirmation through the explicitly marked chat self, legacy account-ID matching, exact emoji keys, other people's reactions, wrong chat/account scope, contradictory self flags, missing/malformed state, delayed reactions with cached identity reads, and removal while either own identity still reacts. When the chat self is unavailable, an unmatched reaction with the requested key cannot establish removal. An empty valid reaction list can establish absence with a known account identity.
+
+One additional published-CLI test sends and removes a synthetic reaction through official CLI 0.6.2 against a loopback HTTP receiver. A read-only reconciliation test calls the same observer without dispatching any write. These tests do not contact WhatsApp. `GROK-TEST.txt` gives the exact GET-only recheck for the already-present live reaction; repeating a send is not needed for acceptance of this matcher fix.
+
 ## v0.7.4 review regressions
 
 Contacts must never substitute a label for an exact ID, even with `--query` or cross-account collisions. Explicit `--by-label` retains name/phone/handle lookup and checks all search pages before treating a label as unique.
