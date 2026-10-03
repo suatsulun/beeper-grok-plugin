@@ -1,0 +1,260 @@
+"""Dispatch one write and observe its effect using bounded, read-only rechecks."""
+import time
+from itertools import chain, repeat
+from urllib.parse import quote
+
+from beeper import Failure
+from history import chat_id
+from writes import dispatch, validate
+
+OBSERVATION_DELAYS = (0, .5, 1, 2)
+OBSERVATION_SECONDS = 8
+GLOBAL_VALUES = {"timeout"}
+GLOBAL_SWITCHES = {"json", "quiet", "full", "yes", "read-only", "help"}
+SCHEMAS = {
+    ("send", "text"): ({"to", "message", "pick", "reply-to", "mention", "wait-timeout"}, {"wait", "no-preview"}, {"to", "message"}),
+    ("send", "file"): ({"to", "file", "caption", "filename", "mime", "pick", "reply-to", "wait-timeout"}, {"wait"}, {"to", "file"}),
+    ("send", "voice"): ({"to", "file", "filename", "mime", "duration", "pick", "reply-to", "wait-timeout"}, {"wait"}, {"to", "file"}),
+    ("send", "sticker"): ({"to", "file", "filename", "mime", "pick", "reply-to", "wait-timeout"}, {"wait"}, {"to", "file"}),
+    ("send", "react"): ({"to", "id", "reaction", "pick", "transaction"}, set(), {"to", "id", "reaction"}),
+    ("send", "unreact"): ({"to", "id", "reaction", "pick", "transaction"}, set(), {"to", "id", "reaction"}),
+    ("messages", "edit"): ({"chat", "id", "message", "pick"}, set(), {"chat", "id", "message"}),
+    ("messages", "delete"): ({"chat", "id", "pick"}, {"for-everyone"}, {"chat", "id"}),
+}
+
+
+def is_message_write(args):
+    return tuple(args[:2]) in SCHEMAS
+
+
+def write_options(args):
+    """Parse option positions, preserving flag-like values and rejecting overrides."""
+    values, switches, required = SCHEMAS[tuple(args[:2])]
+    values, switches = values | GLOBAL_VALUES, switches | GLOBAL_SWITCHES
+    flags, native = {}, list(args[:2])
+    index = 2
+    while index < len(args):
+        token = args[index]
+        name, equals, value = token[2:].partition("=") if token.startswith("--") else ("", "", "")
+        if name not in values | switches:
+            raise Failure("Unsupported write option. Use long options from command --help; target overrides are disabled.", "invalid_arguments")
+        if name in flags and name != "mention":
+            raise Failure("Supply each write option once (only --mention is repeatable).", "invalid_arguments")
+        if name in switches:
+            if equals and value not in ("true", "false"):
+                raise Failure("Boolean options accept only true or false.", "invalid_arguments")
+            flags[name] = value != "false"
+            if flags[name]:
+                native.append("--" + name)
+        else:
+            if not equals:
+                index += 1
+                if index >= len(args):
+                    raise Failure("A write option is missing its value.", "invalid_arguments")
+                value = args[index]
+            if name == "mention":
+                flags.setdefault(name, []).append(value)
+            else:
+                flags[name] = value
+            native.append("--" + name + "=" + value)
+        index += 1
+    if not flags.get("help"):
+        if any(key not in flags for key in required):
+            raise Failure("Required write options are missing. Check command --help.", "invalid_arguments")
+        if any(not flags.get(key) for key in required - {"message"}):
+            raise Failure("Identifiers and file paths must not be empty.", "invalid_arguments")
+        if "pick" in flags and (not flags["pick"].isdecimal() or int(flags["pick"]) < 1):
+            raise Failure("Use a positive --pick index.", "invalid_arguments")
+    return flags, native
+
+
+def observation(state, reason, **details):
+    return {"state": state, "reason": reason, "retrySafe": False,
+            "scope": "Server-observed state; delivery and recipient reads are not verified",
+            "deliveryVerified": False, **details}
+
+
+def run_write(runtime, args):
+    flags, native = write_options(args)
+    if flags.get("help"):
+        return runtime.cli(native)
+    runtime.writable()
+    if flags.get("read-only"):
+        raise Failure("Read-only mode prevents message changes.", "read_only")
+    timeout = validate(flags)
+    key = "to" if args[0] == "send" else "chat"
+    chat = chat_id(runtime, flags[key], int(flags["pick"]) if flags.get("pick") else None)
+    try:
+        # CLI 0.6.2's SDK retries writes on transport/HTTP failures. Bypass that
+        # transport for every message mutation, not only flag-looking text.
+        data = dispatch(runtime, args[1], chat, flags, timeout)
+    except Failure as error:
+        error.write_outcome = observation("unknown", "Command did not establish its final outcome. Reconcile before retrying.",
+                                          chatID=chat, messageID=flags.get("id"))
+        raise
+    result = dict(data) if isinstance(data, dict) else {"result": data}
+    result["writeOutcome"] = observe(runtime, args[1], chat, data, flags)
+    return result
+
+
+def observe(runtime, operation, chat, data, expected):
+    data = data if isinstance(data, dict) else {}
+    if data.get("chatID", chat) != chat:
+        return observation("unknown", "Returned chat differs from the request. Resolve an explicit network member chat before further writes.",
+                           chatID=chat, observedChatID=data.get("chatID"), scopeMismatch=True, readAttempts=0)
+    message = data.get("message") if isinstance(data.get("message"), dict) else {}
+    sending = operation in {"text", "file", "voice", "sticker"}
+    ident = (message.get("id") or data.get("pendingMessageID") or data.get("id")) if sending else expected.get("id")
+    if not isinstance(ident, str) or not ident:
+        return observation("accepted", "Command returned without a message identifier for observation.", chatID=chat, readAttempts=0)
+    known_final_id = (message.get("id") or data.get("id")) if sending else ident
+    waiting = expected.get("wait", False)
+    deadline = time.monotonic() + (expected.get("wait-timeout", 30000) / 1000 if waiting else OBSERVATION_SECONDS)
+    attempts = 0
+    accounts_cache = None
+    chat_cache = None
+    last = observation("unknown", "Read-back has not established the effect.", chatID=chat, messageID=ident)
+
+    def get(path):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Failure("Observation time budget expired.", "timeout")
+        return runtime.api("GET", path, timeout=min(2, remaining))
+
+    def accounts():
+        nonlocal accounts_cache
+        if accounts_cache is None:
+            accounts_cache = get("/v1/accounts")
+        return accounts_cache
+
+    def chat_details():
+        nonlocal chat_cache
+        if chat_cache is None:
+            chat_cache = get("/v1/chats/" + quote(chat, safe=""))
+        return chat_cache
+
+    delays = chain(OBSERVATION_DELAYS, repeat(1)) if waiting else OBSERVATION_DELAYS
+    for delay in delays:
+        if time.monotonic() + delay >= deadline:
+            break
+        if delay:
+            time.sleep(delay)
+        attempts += 1
+        try:
+            row = get("/v1/chats/" + quote(chat, safe="") + "/messages/" + quote(ident, safe=""))
+            last, retry = assess(operation, chat, known_final_id, row, expected, accounts, chat_details)
+        except Failure as error:
+            last = observation("unknown", "Read-back was unavailable after the write. No write was repeated.",
+                               chatID=chat, messageID=ident, readErrorCode=error.code)
+            retry = error.code not in (401, 403, "http_401", "http_403", "unauthorized", "forbidden")
+        except Exception:
+            last = observation("unknown", "Read-back had an unexpected shape; no write was repeated.", chatID=chat, messageID=ident)
+            retry = False
+        if not retry:
+            return {**last, "readAttempts": attempts, "observationExhausted": False}
+    return {**last, "readAttempts": attempts, "observationExhausted": True}
+
+
+def text_matches(actual, expected):
+    # Only equivalent transport newlines are normalized. Stripping Markdown/HTML
+    # could falsely confirm changed content, links, mentions or formatting.
+    return isinstance(actual, str) and actual.replace("\r\n", "\n") == expected.replace("\r\n", "\n")
+
+
+def assess_reaction(operation, chat, row, expected, accounts, chat_details, details):
+    # Network account IDs and room participant IDs can represent the same self
+    # with different strings. Only explicit, scoped identity evidence is used.
+    current = chat_details()
+    account_id = row.get("accountID")
+    if (not isinstance(account_id, str) or not account_id or not isinstance(current, dict)
+            or current.get("id") != chat or current.get("accountID") != account_id):
+        return observation("unknown", "Reaction identity lookup returned a different or unidentified chat/account.",
+                           scopeMismatch=True, **details), False
+    participants = current.get("participants")
+    members = participants.get("items") if isinstance(participants, dict) else None
+    if not isinstance(members, list) or any(not isinstance(member, dict) for member in members):
+        return observation("unknown", "Chat participant identity data is unavailable.", **details), True
+    self_ids = {member["id"] for member in members if member.get("isSelf") is True
+                and isinstance(member.get("id"), str) and member["id"]}
+    other_ids = {member["id"] for member in members if member.get("isSelf") is False
+                 and isinstance(member.get("id"), str) and member["id"]}
+    listed = accounts()
+    listed = listed.get("items", []) if isinstance(listed, dict) else listed
+    selected = [a for a in listed if isinstance(a, dict) and a.get("accountID", a.get("id")) == account_id] if isinstance(listed, list) else []
+    user = selected[0].get("user") if len(selected) == 1 else None
+    actor = user.get("id") if isinstance(user, dict) and user.get("isSelf") is not False else None
+    account_ids = {actor} if isinstance(actor, str) and actor else set()
+    if (self_ids | account_ids) & other_ids:
+        return observation("unknown", "Reaction identity evidence conflicts with a participant marked as someone else.", **details), False
+
+    identities = self_ids | account_ids
+    reactions = row.get("reactions")
+    available = isinstance(reactions, list) and all(
+        isinstance(r, dict) and isinstance(r.get("participantID"), str) and bool(r["participantID"])
+        and isinstance(r.get("reactionKey"), str) and bool(r["reactionKey"]) for r in reactions)
+    checks = {"accountIdentityAvailable": bool(account_ids), "chatSelfIdentityAvailable": bool(self_ids),
+              "reactionStateAvailable": available}
+    if not identities or not available:
+        return observation("unknown", "Own reaction identity or reaction state is unavailable.", checks=checks, **details), True
+    same_key = [r for r in reactions if r["reactionKey"] == expected.get("reaction")]
+    account_match = any(r["participantID"] in account_ids for r in same_key)
+    self_match = any(r["participantID"] in self_ids for r in same_key)
+    present = account_match or self_match
+    checks.update(accountIdentityMatches=account_match, chatSelfIdentityMatches=self_match, ownReactionPresent=present)
+    # Without a room self identity, a differing ID with the same key might still
+    # be ours. Never confirm removal merely because the account ID did not match.
+    if operation == "unreact" and not present and same_key and not self_ids:
+        return observation("unknown", "Removal cannot be confirmed without the chat's self identity.", checks=checks, **details), True
+    matched = present if operation == "react" else not present
+    return observation("confirmed" if matched else "unknown",
+                       "Own reaction state observed." if matched else "Own reaction state does not yet match.",
+                       checks=checks, **details), not matched
+
+
+def assess(operation, chat, known_final_id, row, expected, accounts, chat_details):
+    sending = operation in {"text", "file", "voice", "sticker"}
+    if not isinstance(row, dict) or row.get("chatID") != chat or not isinstance(row.get("id"), str) or not row["id"]:
+        return observation("unknown", "Read-back did not identify a message in the requested chat. Resolve merged chats to a network member.",
+                           chatID=chat, messageID=known_final_id, scopeMismatch=True), False
+    if known_final_id and row["id"] != known_final_id:
+        return observation("unknown", "Read-back returned a different message.", chatID=chat, messageID=known_final_id), False
+    details = {"chatID": chat, "messageID": row["id"]}
+    status = (row.get("sendStatus") or {}).get("status")
+    details["bridgeSendStatus"] = status or "unavailable"
+    if sending and status in {"FAIL_PERMANENT", "FAIL_RETRIABLE", "FAILED"}:
+        return observation("failed", "Server reports a send failure. No automatic retry was made.", **details), False
+    if sending and status in {"PENDING", "IN_PROGRESS"}:
+        return observation("pending", "Server still reports the send as pending.", **details), True
+    if operation == "delete":
+        deleted, hidden = row.get("isDeleted") is True, row.get("isHidden") is True
+        matched = deleted or (hidden and not expected.get("for-everyone"))
+        return observation("confirmed" if matched else "unknown",
+            "Deletion or local hiding marker observed; remote erasure is not established." if matched else "No requested deletion marker was observed.",
+            deleted=deleted, hidden=hidden, textRetained=bool(row.get("text")), remoteErasureVerified=False, **details), not matched
+    if row.get("isDeleted") or row.get("isHidden"):
+        return observation("unknown", "Message is deleted or hidden; requested content cannot be confirmed.", **details), False
+    if operation in {"react", "unreact"}:
+        return assess_reaction(operation, chat, row, expected, accounts, chat_details, details)
+    checks = {"ownMessage": row.get("isSender") is True}
+    if expected.get("message") is not None:
+        checks["textMatches"] = text_matches(row.get("text"), expected["message"])
+    if expected.get("reply-to") is not None:
+        checks["replyMatches"] = row.get("linkedMessageID") == expected["reply-to"]
+    if expected.get("mention"):
+        checks["mentionsMatch"] = isinstance(row.get("mentions"), list) and set(row["mentions"]) == set(expected["mention"])
+    if operation in {"file", "voice", "sticker"}:
+        attachments = row.get("attachments") or []
+        checks["attachmentVisible"] = bool(attachments)
+        if expected.get("caption") is not None:
+            checks["captionMatches"] = text_matches(row.get("text"), expected["caption"])
+        if operation in {"voice", "sticker"}:
+            checks["mediaSubtypeMatches"] = row.get("type") == {"voice": "VOICE", "sticker": "STICKER"}[operation] or any(
+                a.get("isVoiceNote" if operation == "voice" else "isSticker") is True for a in attachments)
+        matched = all(checks.values())
+        return observation("accepted" if matched else "unknown", "Attachment fields checked; file bytes remain unverified.",
+                           checks=checks, fileIdentityVerified=False, **details), not matched
+    if not all(checks.values()):
+        return observation("unknown", "Requested text, author, mentions or reply linkage is not yet established. Rich-text conversion may prevent exact text comparison.",
+                           checks=checks, contentVerified=False, **details), True
+    return observation("confirmed", "Requested message fields observed on Server; bridge status is reported separately from recipient receipts.",
+                       checks=checks, contentVerified=True, **details), False

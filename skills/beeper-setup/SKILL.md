@@ -1,20 +1,25 @@
 ---
 name: beeper-setup
-description: Install or update Beeper CLI and Server on Grok's cloud computer, sign in to an existing Beeper account, verify with a trusted device or recovery key, and diagnose access.
+description: Complete permission-based first-run setup of Beeper CLI and Server on the shared Grok cloud computer, reuse an existing installation across devices, sign in privately, verify, update, or diagnose access.
 ---
 
 # Set up Beeper
 
-Read [Beeper](../beeper/SKILL.md) for the shared rules and resolve `HELPER` to `../beeper/scripts/beeper.py` from this directory. “Set up Beeper” authorizes installation and startup. Run everything on the Grok cloud computer; leave the user's PC alone.
+Read [Beeper](../beeper/SKILL.md) for default onboarding and resolve `HELPER` to `../beeper/scripts/beeper.py` from this directory. First-run installation requires the user's approval for CLI and Server on their shared Grok cloud computer. An explicit approval already given for that exact scope is sufficient; do not repeat the question. Run everything on that cloud computer; leave the user's PC alone.
 
 ## Install and resume
 
 ```sh
-python3 "$HELPER" status
+python3 "$HELPER" onboard
+# Only after the user approves the initial cloud installation:
+python3 "$HELPER" setup --approved
+# Resume a previously approved incomplete setup, or reuse an existing target:
 python3 "$HELPER" setup
 ```
 
-Run `setup` if the tools, target, or running process are missing. It installs the latest official standalone CLI with a SHA-256 check, asks that CLI to install official Server, creates a production target only when absent, and starts it. It preserves an existing target, accounts, and keys. Repeating setup does not replace an existing installation. If only the process stopped, `start` is enough.
+`onboard` returns a local installation plan without process launches, downloads, or writes. Follow its state as described in the main skill. `setup` refuses a new installation without approval, before creating even the data directory or a lock file. `setup --approved` records the consent in that profile and installs the latest official standalone CLI with a SHA-256 check, asks that CLI to install official Server, creates one production target, and starts it. A declined or unanswered prompt means do not run it.
+
+Existing installations from older plugin versions are reused without an approval marker or another installation prompt. Repeating setup preserves the target, accounts, and keys and does not start an already-running Server again. If only the process stopped, `start` is enough. Invalid/missing files belonging to an existing profile are a repair case, detected before downloads. Client-device changes never authorize a new profile. Updates remain a separate user-requested action; install consent does not authorize future upgrades, message sends, or account changes.
 
 Since v0.7.1, CLI discovery uses GitHub's public release redirect and Beeper's `binaries.json`, without GitHub's REST API. Setup needs no GitHub account, token, or secret prompt. Do not wait for an API quota reset before trying this helper. It caches validated release metadata for 15 minutes, shared by setup and update checks; results include `source`, `checkedAt`, and `cached`. The archive's SHA-256 is still checked before installation. That digest is supplied by Beeper with the release; it checks the downloaded bytes against the publisher's manifest, not an independent security audit.
 
@@ -93,3 +98,9 @@ An already-stopped Server can be updated. Setup, update, start, and private sign
 Afterward repeat the account/chat/message checks above and compare account IDs with the pre-update result. Don't claim success from an updater exit code alone. No automatic rollback: an updated database may be incompatible with an old executable. Preserve the backup and report any regression.
 
 Checked on 28 September 2026: published CLI **0.6.2**; its Server nightly feed **4.3.156** (26 September). The separate stable feed reports 4.3.152. CLI 0.6.2 installs from the nightly feed even with production authentication. Read actual installed versions; do not invent a CLI upgrade or confuse the download channel with the account environment.
+
+## Verification cache and diagnostic interpretation
+
+An idle or finished `verify show` does not write a cache. An active comparison caches only its ID and comparison values. With `BEEPER_READONLY=1`, even an active show does not refresh that cache and verification changes are blocked; display the comparison again outside audit mode before obtaining confirmation. Confirm re-reads live state and rejects missing, changed, or completed requests.
+
+A successful `doctor` command can return `ok: false`: execution succeeded but a health check failed. Preserve both facts and assess actual message access separately. Never change health flags to make a report look successful.

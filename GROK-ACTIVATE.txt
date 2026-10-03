@@ -1,0 +1,59 @@
+Beeper 0.7.7 — default shared-cloud onboarding
+
+Activate this plugin for the user's Grok account, with all five skills: beeper,
+beeper-setup, beeper-messages, beeper-chats, and beeper-reports. Use the native
+plugin/skill registration mechanism available in Grok Bot; update existing
+entries instead of making duplicates. Do this as one plugin onboarding flow,
+not a list of setup commands for the user to run. Do not install Grok Build or
+search the computer for its CLI.
+
+Verify the supplied source revision and keep its files in one persistent
+/workspace directory outside the Beeper data profile. Saved skill links and
+HELPER must resolve to that exact source. Preserve the bundle's relative paths
+where supported; otherwise use absolute paths in the native registrations.
+All five skills must share the already-established BEEPER_PLUGIN_HOME, default
+/workspace/.beeper-grok, and the existing grok-bot target. Never create a new
+profile for a Bot, conversation, client device, or plugin version.
+
+As part of activation, read the main Beeper skill and run its read-only onboard
+command on the account's Grok cloud computer. Handle the returned state:
+
+- configured: reuse the existing installation and accounts. No installation
+  prompt, new CLI/Server download, update, or repeated sign-in is needed merely
+  because the user changed devices. Check status for live access. If only Server
+  stopped, resume the same target. Do not treat initializing alone as lost login.
+- needs_approval: show approvalPrompt before installing anything. Wait for the
+  user. Approval of the plugin itself does not automatically approve downloading
+  CLI/Server. If that exact cloud installation was already explicitly approved,
+  use the existing authorization. After approval run setup --approved; if the
+  user declines, leave the installation untouched.
+- setup_incomplete: previously saved approval covers resuming setup on this same
+  cloud profile. Resume setup unless permission was withdrawn. Do not resume it
+  in a read-only audit.
+- repair_required: preserve the existing profile and report the condition. Do
+  not replace it, reconnect accounts, or create a fresh profile as a fallback.
+
+For a new installation, complete the existing private Beeper sign-in and trusted
+verification flow when required, then resume the original task. Reuse networks
+already connected to that Beeper account. Installation consent does not authorize
+provider logins, message sends, account changes, or future upgrades. No secrets
+belong in saved skills or chat. Nothing is installed on the user's PC or phone.
+
+Read back the saved registrations and report all five skill names, the source
+revision, resolved helper path, and shared data directory. Never call manual
+helper execution a registered plugin. If the host cannot register the bundle,
+report that exact missing capability and leave persistent activation pending.
+If no native install event is available, the main skill starts this same flow
+on the first Beeper request; do not claim an unobserved automatic install popup.
+
+For this user's existing installation, use one read-only check of the known
+chat after activation. No test messages, reactions, deletes, cleanup, or updates.
+Then validate from a fresh conversation on a second device using the same Grok
+account: it must discover the saved skills and reuse the same cloud profile
+without another installation prompt or login. Report that cross-device check
+as pending until actually performed.
+
+Official Bot references:
+https://docs.x.ai/grok-bot/computer-and-apps
+https://docs.x.ai/grok-bot/skills-routines-and-automations
+https://docs.x.ai/grok-bot/mobile

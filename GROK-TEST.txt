@@ -1,0 +1,58 @@
+Beeper Grok plugin 0.7.7 — message transport and export acceptance
+
+Test this candidate alongside the working installation. Keep the existing CLI,
+Server, profile, accounts, saved skills, and live messages unchanged. This release
+fixes four issues in the existing messaging/export scope; it adds no login or
+logout flows. Do not start provider login, reconnect, setup, update, or recovery.
+
+1. Extract to a new persistent /workspace directory outside the installed source
+   and Beeper data. Verify SHA256SUMS, SOURCE-REVISION.txt and the manifest. The
+   manifest and helper must report 0.7.7. Read the changed helper and skills.
+
+2. From the candidate directory, run the isolated offline suite:
+   env -u BEEPER_PLUGIN_HOME -u BEEPER_READONLY python3 -m unittest discover -s tests -v
+   Respect host resource limits. These tests use synthetic data and loopback
+   receivers, not live accounts. They simulate HTTP failures/disconnects, count
+   actual mutation requests, retain accepted pending IDs when reads time out,
+   test multipart media upload, and guard export scope and read-only mode.
+   The six PublishedCLITests require BEEPER_TEST_CLI and an isolated CLI cache.
+   Report missing prerequisites as skips; do not install or modify the working
+   CLI to run them. VALIDATION.json records the author's environment, not yours.
+   Count passes, failures and skips separately. An unavailable Grok validator is
+   not a pass. Do not search for or install Grok Build.
+
+3. Reuse the established BEEPER_PLUGIN_HOME and the candidate's absolute HELPER.
+   Set BEEPER_READONLY=1. Run onboard and status once, then one messages list on
+   the previously verified chat with limit 1. Confirm the same profile, target,
+   account and CLI/Server identity. Readiness initializing alone does not justify
+   changing the installation. Do not include message bodies or secrets in logs.
+
+4. Optional read-only guard check: with BEEPER_READONLY=1, run helper cli export
+   --out /workspace/beeper-077-readonly-guard-UNIQUE --no-attachments --quiet,
+   choosing a fresh path that does not exist. Expect rejection before any CLI,
+   API, export directory, or file creation. Do not remove read-only mode to make
+   this command succeed. Exercise writable export behavior only through offline
+   fixtures; no live export is authorized by this acceptance handoff.
+
+5. Return revision, versions, exact test counts/skips, unchanged installation
+   identity, read-only guard result, and the bounded message read result. No
+   sends, edits, reactions, deletions, downloads, cleanup, or account changes.
+
+The transport fix submits each message mutation once and never uses CLI SDK
+write retries. --wait permits bounded GET-only observation; expiry preserves
+an accepted pendingMessageID and an unknown/pending writeOutcome. An uncertain
+outcome never authorizes replaying the write. Live failure injection is not
+needed and is not authorized.
+
+Full exports now record account/chat selection, limits, and content options.
+An unlimited request cannot silently reuse a completed limited checkpoint.
+Use a new output, or an explicitly intended --force rebuild of the same
+account/chat selection. Legacy outputs without scope metadata need a new
+directory. The offline official-CLI test verifies a two-message sample is
+rebuilt into all six available synthetic messages.
+
+Once activation is requested, follow GROK-ACTIVATE.txt to update all five native
+private skills to this exact source, preserving the shared home/profile. Manual
+helper execution is not persistent activation. First-install UI, live media,
+removal/deletion and fresh-session report checks remain separate acceptance
+items; do not perform them as part of these four fixes.

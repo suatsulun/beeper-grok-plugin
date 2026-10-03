@@ -68,7 +68,8 @@ elif args[:2]==['messages','list']:
  data={'tokenUsed':os.environ.get('BEEPER_ACCESS_TOKEN'),'config':os.environ['BEEPER_CLI_CONFIG_DIR'],'envTarget':os.environ['BEEPER_TARGET']}
 elif args[:2]==['messages','export']:
  Path(args[args.index('--output')+1]).write_text('[]');sys.exit(0)
-elif args[0]=='export': print('Exported synthetic data');sys.exit(0)
+elif args[0]=='export':
+ out=Path(args[args.index('--out')+1]);save(out/'manifest.json',{'chatCount':1,'messageCount':2,'attachmentCount':0});save(out/'.beeper-export-state.json',{'chats':{}});print('Exported synthetic data');sys.exit(0)
 elif args[0]=='watch':
  if (root/'fail-watch').exists():sys.exit(1)
  if (root/'child-watch').exists():
@@ -168,7 +169,7 @@ class RuntimeTests(RuntimeFixture):
     def test_inherited_credentials_and_target_are_ignored(self):
         self.existing()
         with patch.dict(os.environ, {"BEEPER_ACCESS_TOKEN": "OTHER_SECRET", "BEEPER_TARGET": "another-target", "BEEPER_CLI_CONFIG_DIR": "/wrong"}):
-            data = self.runtime.command(["messages", "list", "--chat", "chat-1"])
+            data = self.runtime.cli(["messages", "list", "--chat", "chat-1"])
         self.assertEqual(data["tokenUsed"], "SYNTHETIC_SECRET")
         self.assertEqual(data["envTarget"], "grok-bot")
         self.assertEqual(data["config"], str(self.runtime.config))
@@ -330,7 +331,7 @@ class RuntimeTests(RuntimeFixture):
     def test_exports_handle_native_non_json_success(self):
         self.existing()
         output = self.root / "messages.json"
-        self.assertTrue(self.runtime.command(["messages", "export", "--chat", "chat-1", "--output", str(output)])["completed"])
+        self.assertTrue(self.runtime.cli(["messages", "export", "--chat", "chat-1", "--output", str(output)])["completed"])
         self.assertEqual(output.read_text(), "[]")
         self.assertTrue(self.runtime.command(["export", "--out", str(self.root / "export")])["completed"])
 
@@ -410,8 +411,12 @@ class RuntimeTests(RuntimeFixture):
         self.assertLess(time.monotonic() - start, 4)
         pid = int((self.root / "child.pid").read_text())
         stat = Path(f"/proc/{pid}/stat")
-        if stat.exists():
-            self.assertEqual(stat.read_text().split()[2], "Z")
+        try:
+            state = stat.read_text().split()[2]
+        except (FileNotFoundError, ProcessLookupError):
+            # A killed child can be reaped between opening and reading /proc.
+            return
+        self.assertEqual(state, "Z")
 
     def test_program_backup_follows_official_launcher_symlink(self):
         self.existing()
@@ -607,6 +612,10 @@ class PublishedCLITests(RuntimeFixture):
         self.received = []
         received = self.received
         verification = {"id": "incoming-native", "state": "requested", "availableActions": ["accept", "cancel"]}
+        self.request_bodies = []
+        self.respond = lambda method, path, body: ({"state": "needs-verification", "verification": verification}
+                                                  if path == "/v1/app/setup" else [])
+        owner = self
 
         class Receiver(BaseHTTPRequestHandler):
             def log_message(self, *_):
@@ -614,7 +623,11 @@ class PublishedCLITests(RuntimeFixture):
 
             def do_GET(self):
                 received.append((self.command, self.path, self.headers.get("Authorization")))
-                body = {"state": "needs-verification", "verification": verification} if self.path == "/v1/app/setup" else []
+                length = int(self.headers.get("Content-Length", 0))
+                submitted = json.loads(self.rfile.read(length)) if length else None
+                if submitted is not None:
+                    owner.request_bodies.append((self.command, self.path, submitted))
+                body = owner.respond(self.command, self.path, submitted)
                 payload = json.dumps(body).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -623,6 +636,8 @@ class PublishedCLITests(RuntimeFixture):
                 self.wfile.write(payload)
 
             do_POST = do_GET
+            do_PUT = do_GET
+            do_DELETE = do_GET
 
         self.receiver = HTTPServer(("127.0.0.1", 0), Receiver)
         thread = threading.Thread(target=self.receiver.serve_forever, daemon=True)
@@ -660,6 +675,116 @@ class PublishedCLITests(RuntimeFixture):
         self.runtime.verify("approve")
         self.assertEqual([item[:2] for item in self.received], [
             ("GET", "/v1/app/setup"), ("POST", "/v1/app/setup/verifications/incoming-native/accept")])
+
+    def test_message_option_values_reach_dispatch_verbatim_with_official_cli(self):
+        self.point_primary_at_receiver()
+        chat = "!self:synthetic"
+        current = {}
+
+        def respond(method, path, body):
+            if method == "POST" and path.endswith("/messages"):
+                current.update(body)
+                return {"chatID": chat, "pendingMessageID": "pending"}
+            if method == "GET" and "/messages/" in path:
+                return {"id": "final", "chatID": chat, "accountID": "network", "isSender": True, "text": current["text"]}
+            return {"state": "ready"}
+
+        self.respond = respond
+        for body in ("--reply-to=literal", "--help", "--read-only", "--target=other", "-qtother", "hello\n$HOME `not-a-command`"):
+            with self.subTest(body=body):
+                before = len(self.request_bodies)
+                result = self.runtime.command(["send", "text", "--to", chat, "--message", body])
+                self.assertEqual(len(self.request_bodies), before + 1)
+                self.assertEqual(self.request_bodies[-1][2]["text"], body)
+                self.assertEqual(result["writeOutcome"]["state"], "confirmed")
+                self.assertEqual(result["writeOutcome"]["bridgeSendStatus"], "unavailable")
+
+    def test_edit_with_official_cli_observes_stale_then_updated_body(self):
+        self.point_primary_at_receiver()
+        chat = "!self:synthetic"
+        reads = []
+        row = {"id": "final", "chatID": chat, "accountID": "network", "isSender": True}
+
+        def respond(method, path, body):
+            if method == "PUT":
+                return {**row, "text": "edited"}
+            if method == "GET" and "/messages/" in path:
+                reads.append(path)
+                return {**row, "text": "old" if len(reads) == 1 else "edited"}
+            return {"state": "ready"}
+
+        self.respond = respond
+        with patch("outcomes.OBSERVATION_DELAYS", (0, 0, 0)):
+            result = self.runtime.command(["messages", "edit", "--chat", chat, "--id", "final", "--message", "edited"])
+        self.assertEqual(result["writeOutcome"]["state"], "confirmed")
+        self.assertEqual(len(reads), 2)
+        self.assertEqual(len([r for r in self.request_bodies if r[0] == "PUT"]), 1)
+
+    def test_react_and_unreact_with_distinct_account_and_chat_self_ids(self):
+        self.point_primary_at_receiver()
+        chat = "!self:synthetic"
+        reactions = []
+
+        def respond(method, path, body):
+            if method == "POST" and path.endswith("/reactions"):
+                reactions.append({"id": "room-self", "participantID": "room-self", "reactionKey": body["reactionKey"]})
+                return {"chatID": chat, "messageID": "final", "reactionKey": body["reactionKey"], "success": True, "transactionID": "synthetic"}
+            if method == "DELETE" and "/reactions/" in path:
+                reactions.clear()
+                return {"chatID": chat, "messageID": "final", "reactionKey": "👍", "success": True}
+            if path == "/v1/accounts":
+                return [{"accountID": "network", "user": {"id": "account-self", "isSelf": True}}]
+            if method == "GET" and "/messages/" in path:
+                return {"id": "final", "chatID": chat, "accountID": "network", "reactions": reactions}
+            return {"id": chat, "accountID": "network", "participants": {
+                "items": [{"id": "room-self", "isSelf": True}], "hasMore": False, "total": 1}}
+
+        self.respond = respond
+        for operation in ("react", "unreact"):
+            result = self.runtime.command(["send", operation, "--to", chat, "--id", "final", "--reaction", "👍"])
+            self.assertEqual(result["writeOutcome"]["state"], "confirmed")
+            self.assertEqual(result["writeOutcome"]["checks"]["chatSelfIdentityMatches"], operation == "react")
+            self.assertFalse(result["writeOutcome"]["checks"]["accountIdentityMatches"])
+        self.assertEqual([method for method, _, _ in self.received if method != "GET"], ["POST", "DELETE"])
+
+    def test_full_export_readonly_scope_changes_and_explicit_rebuild(self):
+        self.point_primary_at_receiver()
+        chat = "!self:synthetic"
+        detail = {"id": chat, "accountID": "network", "title": "Synthetic", "type": "single", "participants": {"items": []}}
+        def respond(method, path, body):
+            route = urlsplit(path).path
+            if route == "/v1/accounts":
+                return [{"accountID": "network", "user": {"id": "self"}}]
+            if route == "/v1/chats":
+                return {"items": [detail], "hasMore": False}
+            if route.endswith("/messages"):
+                return {"items": [{"id": str(i), "chatID": chat, "accountID": "network", "isSender": True,
+                                   "text": "synthetic", "sortKey": str(i), "timestamp": "2026-10-04T10:00:00Z"}
+                                  for i in range(6, 0, -1)], "hasMore": False}
+            return detail
+        self.respond = respond
+        output = self.root / "snapshot"
+        args = ["export", "--out", str(output), "--no-attachments", "--quiet"]
+        with patch.dict(os.environ, {"BEEPER_READONLY": "1"}), self.assertRaises(Failure):
+            self.runtime.command(args)
+        with self.assertRaises(Failure):
+            self.runtime.command([*args, "--read-only"])
+        self.assertEqual(self.received, [])
+        self.assertFalse(output.exists())
+        limited = self.runtime.command([*args, "--limit-messages", "2"])
+        self.assertEqual(limited["messageCount"], 2)
+        self.assertTrue(limited["coverage"]["limitReached"])
+        before = len(self.received)
+        with self.assertRaises(Failure) as error:
+            self.runtime.command(args)
+        self.assertEqual(error.exception.code, "export_scope_changed")
+        self.assertEqual(len(self.received), before)
+        full = self.runtime.command([*args, "--force"])
+        self.assertEqual(full["messageCount"], 6)
+        self.assertFalse(full["coverage"]["limitsApplied"])
+        files = list((output / "chats").glob("*/messages.json"))
+        self.assertEqual(len(files), 1)
+        self.assertEqual(len(json.loads(files[0].read_text())), 6)
 
 
 class Response(io.BytesIO):

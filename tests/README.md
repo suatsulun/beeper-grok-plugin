@@ -1,12 +1,50 @@
 # Validation
 
+## v0.7.7 transport and full-export regressions
+
+`test_write_transport.py` counts actual loopback HTTP requests under 500/503/429/408 responses and dropped connections, across sends, edits, deletions, and reactions/removals. It checks retained pending IDs after read-back expiry; delayed read resolution without resending; endpoint encoding and text/reply/mention/transaction options; multipart upload bytes, UTF-8 filename metadata, voice/sticker subtype metadata; and no message submission after a failed upload. These tests do not need an installed CLI.
+
+`test_exports.py` checks read-only rejection before CLI/API/filesystem effects, changed limits/content scope, legacy unknown checkpoints, explicit rebuilds without stale counts, same-scope interrupted resumes, manifest validation, profile protection, and concurrent-output locking. The additional `PublishedCLITests` case runs official CLI 0.6.2 against a synthetic receiver: export two of six messages, reject an unsafe unlimited resume, then explicitly rebuild and verify all six JSON records. The optional published-CLI class now has six tests; skipped tests remain untested, not passes.
+
+Message writes now bypass the CLI transport. Earlier observer fixtures still test read-back decisions separately; counting one mocked dispatch is not evidence that the HTTP layer sends once. The new fault tests check that boundary directly. No login/logout flow was added or changed by this release.
+
+## v0.7.6 onboarding regressions
+
+`test_onboarding.py` exercises missing-installation consent with zero pre-approval filesystem/process/network effects; a synthetic approved CLI/Server install; resumption after an interrupted install; another runtime reusing the same target; legacy account/profile preservation without a consent marker; stopped-versus-running Server behavior; consent scope/root matching; concurrent setup locks; repair checks before downloads; script entry-point output; a fixed cloud home independent of client home or working directory; and helper/manifest version alignment. Installer and network dependencies are synthetic. A passing fixture cannot prove that Grok Bot emits an install-time event, registers the five skills, or discovers them in a fresh conversation. Record those host checks separately.
+
+## v0.7.5 reaction identity regressions
+
+The sanitized WhatsApp reproduction uses different account and chat self IDs. Tests check confirmation through the explicitly marked chat self, legacy account-ID matching, exact emoji keys, other people's reactions, wrong chat/account scope, contradictory self flags, missing/malformed state, delayed reactions with cached identity reads, and removal while either own identity still reacts. When the chat self is unavailable, an unmatched reaction with the requested key cannot establish removal. An empty valid reaction list can establish absence with a known account identity.
+
+One additional published-CLI test sends and removes a synthetic reaction through official CLI 0.6.2 against a loopback HTTP receiver. A read-only reconciliation test calls the same observer without dispatching any write. These tests do not contact WhatsApp. The earlier 0.7.5 acceptance used a GET-only recheck for the already-present live reaction; repeating a send is not needed for acceptance of this matcher fix.
+
+## v0.7.4 review regressions
+
+Contacts must never substitute a label for an exact ID, even with `--query` or cross-account collisions. Explicit `--by-label` retains name/phone/handle lookup and checks all search pages before treating a label as unique.
+
+Write tests cover delayed edits, temporary 404s, pending-to-observed sends, missing optional bridge status, permanent failures, bounded observation time, unchanged write counts, literal flag-like text, repeated mentions, formatting uncertainty, captions, media subtype evidence, local hiding versus deletion for everyone, and unexpected member-chat routing. The official-CLI receiver also checks normal text sends and edits through the real published parser. Some flag-like text is incompatible with that parser: the helper selects a JSON API text/edit path before dispatch, never as a retry.
+
+Search tests cover fractional precision, inclusive boundaries, exclusive next-midnight report ends, timezone conversion, post-filter pagination, repeated SDK-style account parameters, duplicates/ties, low-priority and muted combinations, stalled pages, budget errors, wrong scope, and explicit truncation.
+
+CI runs the synthetic suite on Python 3.10 and 3.13, then the published-CLI integration suite. `tests/prepare_official_cli.py --root /absolute/disk-backed/isolated-directory` downloads and checks the pinned Linux x64 CLI 0.6.2 archive and binary and warms its standalone cache; it never installs a Server or signs in. Follow the host resource checks and heavy-job lock before preparation/tests. Set `BEEPER_TEST_CLI` to that directory's `bin/beeper` and `BEEPER_TEST_CLI_CACHE` to its `cache` for local integration tests. Preparation rejects `/tmp` and an existing targets directory. No account token is needed.
+
+## v0.7.3 audit regressions
+
+The additional suites exercise real cursor tokens instead of IDs or sort keys, anchors within/between pages, nearest newer messages, context on both sides, timestamp ties, boundary duplicates, cursor cycles, wrong accounts/chats, and bounded failures. One test drives the helper as a subprocess against a synthetic loopback HTTP server and verifies its authenticated requests. No real account is used.
+
+Contact tests cover exact identity, original-search hints, contacts after page one, ambiguous names/accounts, and incomplete enumeration. Outcome tests check reply linkage, changed text, own reactions, pending/failed sends, read-back failures, and retained deletion text, with exactly one CLI write invocation and no retry. Export tests cover inclusive timezone-aware bounds, atomic replacement, private permissions, budget failures, and profile/read-only protection. Verification tests preserve live-comparison guards while checking idle/read-only cache behavior. Existing setup/update/sign-in tests must still pass.
+
+These tests do not prove that the user's bridge implements every feature. In particular, a fixture passing does not establish real delivery, message history completeness, media-byte identity, or a model's summary accuracy. The optional official-CLI integration tests are counted as skipped when no isolated published CLI is supplied. See `GROK-TEST.txt` for bounded live acceptance of the candidate source without updating or resetting the account.
+
+For report-skill evaluation, give the model an independently prepared transcript and request a real summary. Score answers without reply links, ambiguous answers, corrections, equal timestamps, duplicates, pending tasks versus completed tasks, unreadable attachments, and embedded instructions. Record whether the model saw expected answers and whether the session was fresh. Assertions in a custom summarizing script are not a model evaluation.
+
 Run `python3 -m unittest discover -s tests -v` with the existing Python runtime. Fixtures live in temporary disk-backed directories under the repository and are removed afterward. No real credentials, browser profiles, account changes, or message sends are involved.
 
 The tests cover credential isolation, private sign-in, failed or duplicate form submissions, recovery, registration refusal, download integrity, preserving an existing profile, update backups/restart behavior, command scope, and bounded message events. They test behavior at CLI/HTTP boundaries, not every upstream network capability.
 
 The review regressions cover short-option target overrides, cross-process lifecycle locking, stopped/stale/live process checks, failed stops, external and symlinked profile backups, incoming verification acceptance, code resend/email correction, ambiguous authentication, cancellation releasing the real job's lock, and errors from the actual Python script entry point. Fake targets now include the real CLI's identity and data-directory fields; stopping an already-stopped fake profile fails just like the published CLI.
 
-Two optional tests exercise an existing isolated official CLI against a local synthetic HTTP receiver. Set `BEEPER_TEST_CLI` to its executable and `BEEPER_TEST_CLI_CACHE` to its already-populated standalone cache, then run the same suite. They check that target overrides cannot forward the synthetic token, a normal accounts read still works, and incoming approval reaches the correct endpoint and request ID. These tests do not download a CLI, install/start a Server, or contact a real account. Without those variables they are skipped.
+The optional published-CLI tests exercise an existing isolated official CLI against a local synthetic HTTP receiver. Set `BEEPER_TEST_CLI` to its executable and `BEEPER_TEST_CLI_CACHE` to its already-populated standalone cache, then run the same suite. They check target isolation, normal reads, incoming verification approval, text arguments, and delayed edit observation. The tests themselves do not download a CLI, install/start a Server, or contact a real account. Without those variables they are skipped; CI has a separate preparation step so its integration job cannot silently skip them.
 
 Release lookup tests cover operation without GitHub's API, no authorization header even when token variables exist, the 15-minute cache, stale/invalid cache rejection, exact release/architecture/filename/digest matching, structured rate-limit/reset information, and ordinary HTTP 403 errors. Update-check tests verify that the native CLI is asked to check Server only, and that a failed CLI lookup is not reported as “up to date.”
 
