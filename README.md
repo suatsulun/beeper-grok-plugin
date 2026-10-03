@@ -17,17 +17,26 @@ This version deliberately covers **existing accounts**. Adding networks, provide
 
 ## What's inside
 
-Five skills: Beeper routing, setup, messages, chats, and reports. Six Python standard-library modules install the official CLI, preserve one cloud profile, provide private sign-in, and repair specific messaging compatibility issues. Native CLI commands remain available through the helper; bounded history and contact-detail reads use the authenticated loopback API directly. No JavaScript browser stack, MCP service, package dependencies, or install hooks.
+Five skills: Beeper routing, setup, messages, chats, and reports. Seven Python standard-library modules install the official CLI, preserve one cloud profile, provide private sign-in, and repair specific messaging compatibility issues. Native CLI commands remain available through the helper; bounded history, search, and contact-detail reads use the authenticated loopback API directly. No JavaScript browser stack, MCP service, package dependencies, or install hooks.
 
 Data stays outside the plugin at `/workspace/.beeper-grok`. Existing `grok-bot` profiles from the 0.6.x plugin are reused. Updating this source alone does not change Server or sign anyone out. “Update Beeper” checks official releases, keeps the old CLI, backs up a stopped Server's profile and program, and runs the official updater. It never patches Beeper binaries or resets account data.
 
-**v0.7.2 fixes the seven code-review findings.** It blocks hidden target overrides, coordinates startup with updates, backs up the configured profile even outside the config directory, and updates an already-stopped Server. Sign-in supports code resend, email correction, and cancellation on the same private page. Incoming trusted-device requests can be accepted, and expected sign-in errors keep their useful explanations. The project still has five skills, three standard-library Python helpers, and no added dependencies.
+**v0.7.2 introduced the earlier setup safeguards.** It blocks hidden target overrides, coordinates startup with updates, backs up the configured profile even outside the config directory, and updates an already-stopped Server. Sign-in supports code resend, email correction, and cancellation on the same private page. Incoming trusted-device requests can be accepted, and expected sign-in errors keep their useful explanations. Later releases retain these safeguards.
 
 **v0.7.1 removes the GitHub API requirement from setup and CLI update checks.** It reads Beeper's public release manifest, caches release details for 15 minutes, and verifies the downloaded archive's SHA-256. Users need no GitHub token and don't have to wait for a shared API quota to reset. Ordinary download restrictions or Beeper Server download failures can still occur; the helper reports them separately. The checksum comes from Beeper's release manifest, so it verifies agreement with the publisher's release, not independent authenticity.
 
 As checked on **28 September 2026**, the latest published CLI is **0.6.2**. The CLI's Server nightly feed reports **4.3.156**; the separate stable feed reports **4.3.152**. Beeper's installer currently uses the nightly feed for Server while the account still signs into production. These are release checks, not a claim that a user's cloud installation has already been updated.
 
 ## Install and development
+
+### v0.7.4 review fixes — candidate
+
+- Contact IDs are exact and case-sensitive, including with an original `--query` hint. A colliding name/phone/handle cannot substitute for the requested person. Name/phone/handle lookup remains available through explicit `--by-label`; multiple matches require disambiguation.
+- Message writes execute once. An immediate read can finish quickly; pending/stale effects receive up to three read-only rechecks within an eight-second observation budget. Results keep message IDs, attempt counts, content evidence, bridge status, and receipt limitations separate. Missing optional `sendStatus` does not prevent confirmation of matching Server content.
+- Message search uses whole-second API queries widened around the requested timezone-aware dates, then filters the exact fractional-second boundaries locally. `--after` and `--before` are inclusive; `--before-exclusive` supports daily `[start, next midnight)` windows. Results are now `{items, coverage}` inside `data`, including effective filters, index exhaustion, and truncation. Search includes low-priority and muted chats unless explicitly excluded.
+- Write argument parsing understands option arity, repeated mentions, and literal values that look like flags. The official CLI rejects some flag-like text values, so those text sends/edits use one JSON API write selected before dispatch. Target overrides remain blocked. Rich text is never flattened to fabricate a match; differing Server representations remain explicitly unverified. Merged-chat scope mismatches stop safely; select an explicit network member chat.
+
+This is a source candidate until the exact revision passes live acceptance and is installed/reloaded on Grok. Tests and a source archive do not activate a plugin. Existing-account scope is unchanged: this version does not add the earlier PC-browser provider-cookie login flow. See [the acceptance handoff](GROK-TEST.txt) for testing without resetting the working account.
 
 ### v0.7.3 audit fixes
 

@@ -611,6 +611,10 @@ class PublishedCLITests(RuntimeFixture):
         self.received = []
         received = self.received
         verification = {"id": "incoming-native", "state": "requested", "availableActions": ["accept", "cancel"]}
+        self.request_bodies = []
+        self.respond = lambda method, path, body: ({"state": "needs-verification", "verification": verification}
+                                                  if path == "/v1/app/setup" else [])
+        owner = self
 
         class Receiver(BaseHTTPRequestHandler):
             def log_message(self, *_):
@@ -618,7 +622,11 @@ class PublishedCLITests(RuntimeFixture):
 
             def do_GET(self):
                 received.append((self.command, self.path, self.headers.get("Authorization")))
-                body = {"state": "needs-verification", "verification": verification} if self.path == "/v1/app/setup" else []
+                length = int(self.headers.get("Content-Length", 0))
+                submitted = json.loads(self.rfile.read(length)) if length else None
+                if submitted is not None:
+                    owner.request_bodies.append((self.command, self.path, submitted))
+                body = owner.respond(self.command, self.path, submitted)
                 payload = json.dumps(body).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -627,6 +635,7 @@ class PublishedCLITests(RuntimeFixture):
                 self.wfile.write(payload)
 
             do_POST = do_GET
+            do_PUT = do_GET
 
         self.receiver = HTTPServer(("127.0.0.1", 0), Receiver)
         thread = threading.Thread(target=self.receiver.serve_forever, daemon=True)
@@ -664,6 +673,50 @@ class PublishedCLITests(RuntimeFixture):
         self.runtime.verify("approve")
         self.assertEqual([item[:2] for item in self.received], [
             ("GET", "/v1/app/setup"), ("POST", "/v1/app/setup/verifications/incoming-native/accept")])
+
+    def test_message_option_values_reach_dispatch_verbatim_with_official_cli(self):
+        self.point_primary_at_receiver()
+        chat = "!self:synthetic"
+        current = {}
+
+        def respond(method, path, body):
+            if method == "POST" and path.endswith("/messages"):
+                current.update(body)
+                return {"chatID": chat, "pendingMessageID": "pending"}
+            if method == "GET" and "/messages/" in path:
+                return {"id": "final", "chatID": chat, "accountID": "network", "isSender": True, "text": current["text"]}
+            return {"state": "ready"}
+
+        self.respond = respond
+        for body in ("--reply-to=literal", "--help", "--read-only", "--target=other", "-qtother", "hello\n$HOME `not-a-command`"):
+            with self.subTest(body=body):
+                before = len(self.request_bodies)
+                result = self.runtime.command(["send", "text", "--to", chat, "--message", body])
+                self.assertEqual(len(self.request_bodies), before + 1)
+                self.assertEqual(self.request_bodies[-1][2]["text"], body)
+                self.assertEqual(result["writeOutcome"]["state"], "confirmed")
+                self.assertEqual(result["writeOutcome"]["bridgeSendStatus"], "unavailable")
+
+    def test_edit_with_official_cli_observes_stale_then_updated_body(self):
+        self.point_primary_at_receiver()
+        chat = "!self:synthetic"
+        reads = []
+        row = {"id": "final", "chatID": chat, "accountID": "network", "isSender": True}
+
+        def respond(method, path, body):
+            if method == "PUT":
+                return {**row, "text": "edited"}
+            if method == "GET" and "/messages/" in path:
+                reads.append(path)
+                return {**row, "text": "old" if len(reads) == 1 else "edited"}
+            return {"state": "ready"}
+
+        self.respond = respond
+        with patch("outcomes.OBSERVATION_DELAYS", (0, 0, 0)):
+            result = self.runtime.command(["messages", "edit", "--chat", chat, "--id", "final", "--message", "edited"])
+        self.assertEqual(result["writeOutcome"]["state"], "confirmed")
+        self.assertEqual(len(reads), 2)
+        self.assertEqual(len([r for r in self.request_bodies if r[0] == "PUT"]), 1)
 
 
 class Response(io.BytesIO):

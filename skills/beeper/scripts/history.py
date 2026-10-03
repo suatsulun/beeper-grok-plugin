@@ -33,13 +33,13 @@ def bounds(flags):
         raise Failure("Use --max-pages 1..200 and --timeout 1..300000 (milliseconds).", "invalid_arguments")
 
 
-def chat_id(runtime, selector, pick=None):
+def chat_id(runtime, selector, pick=None, timeout=None):
     if selector.startswith("!"):
         return selector
     args = ["chats", "show", "--chat", selector, "--read-only"]
     if pick is not None:
         args += ["--pick", str(pick)]
-    chat = runtime.cli(args)
+    chat = runtime.cli(args, **({"timeout": timeout} if timeout is not None else {}))
     if not isinstance(chat, dict) or not isinstance(chat.get("id"), str):
         raise Failure("Chat lookup did not return an ID.", "invalid_response")
     return chat["id"]
@@ -78,7 +78,7 @@ def rows(runtime, chat, max_pages=20, timeout=30000):
             if (not isinstance(row, dict) or not isinstance(row.get("id"), str)
                     or not row["id"] or row.get("chatID") != chat
                     or not isinstance(row.get("accountID"), str)):
-                raise Failure("History returned an invalid message or a different chat.", "invalid_history")
+                raise Failure("History returned an invalid message or a different chat. For merged conversations, select an explicit network member chat.", "invalid_history")
             account = account if account is not None else row["accountID"]
             if account != row["accountID"]:
                 raise Failure("History crossed account boundaries.", "invalid_history")

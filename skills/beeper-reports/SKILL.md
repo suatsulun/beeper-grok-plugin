@@ -10,13 +10,15 @@ Read [Beeper](../beeper/SKILL.md) and [Messages](../beeper-messages/SKILL.md). `
 Use the requested accounts, chats, dates, and timezone. Infer them from conversation context when clear. For “what did I miss today,” use today in the user's timezone and report that scope. Start with a bounded read; don't export the whole account to answer a small question.
 
 ```sh
-python3 "$HELPER" cli messages search --account 'ACCOUNT_ID' --after 'ISO_START' --before 'ISO_END' --limit 200
+python3 "$HELPER" cli messages search --account 'ACCOUNT_ID' --after 'ISO_START' --before 'ISO_END' --before-exclusive --no-exclude-low-priority --include-muted --limit 200
 python3 "$HELPER" cli messages list --chat 'CHAT_ID' --limit 100
 ```
 
 For decisions, tasks, and unanswered questions, read surrounding conversation, including the user's replies. Received-only data cannot establish whether they answered. Attribute each item to its speaker and date, include chat/message IDs or returned links for traceability, and distinguish explicit commitments from inference. Don't invent attachment contents or summarize inaccessible messages.
 
 A useful report gives the main developments, requested counts, open questions, and next actions, followed by its coverage and any gaps. Counts apply only to retrieved data. If a limit is reached, page further within the requested scope or label the result partial. Sort by actual timestamps and de-duplicate account/chat/message IDs. Don't imply a search index contains all historical messages.
+
+Search results are in `data.items`; retain `data.coverage` with the report. For “all chats,” include low-priority and muted chats explicitly as above. For an inbox-only request, state any exclusions and set the matching filters. A daily report runs from local midnight inclusively to the next local midnight exclusively; preserve offsets and fractional seconds. Search can also use inclusive `--before` when explicitly requested. A reached limit is partial coverage: increase the bounded limit or use overlapping smaller date windows and de-duplicate, without changing the agreed scope. `sourceExhausted` describes the available search index only.
 
 For exact date-bound exports of one chat:
 

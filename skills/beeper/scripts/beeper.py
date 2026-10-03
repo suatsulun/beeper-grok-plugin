@@ -20,7 +20,7 @@ import urllib.parse
 import urllib.request
 
 TARGET = "grok-bot"
-VERSION = "0.7.3"
+VERSION = "0.7.4"
 SETUP = "/v1/app/setup"
 
 
@@ -343,11 +343,17 @@ class Runtime:
             raise Failure("Use a messaging command, or setup/status/verify for Beeper account setup.")
         if args[0] == "accounts" and (len(args) < 2 or args[1] not in ("list", "show", "--help")):
             raise Failure("Only existing accounts are supported. Adding, reconnecting, and removing accounts are outside this plugin.")
+        from outcomes import is_message_write, run_write
+        if is_message_write(args):
+            return run_write(self, args)
         blocked = ("--target", "--base-url", "--debug", "--no-json", "--events", "--ids")
         # Only long options: short clusters such as -qtother can hide a target override.
         if any(a.split("=", 1)[0] in blocked or re.match(r"^-[A-Za-z]", a) for a in args):
             raise Failure("Use long options. Target overrides, debug output, and non-JSON output are disabled.")
         if "--help" not in args:
+            if args[:2] == ["messages", "search"]:
+                from search import command
+                return command(self, args)
             if args[:2] in (["messages", "list"], ["messages", "context"], ["messages", "export"]):
                 from history import command
                 return command(self, args)
@@ -369,18 +375,14 @@ class Runtime:
             archived = args[1] == "archive"
             self.api("POST", "/v1/chats/" + urllib.parse.quote(chat_id, safe="") + "/archive", {"archived": archived})
             return {"chatID": chat_id, "archived": archived}
-        from outcomes import is_message_write, run_write
-        if "--help" not in args and is_message_write(args):
-            self.writable()
-            if "--read-only" in args or "--read-only=true" in args:
-                raise Failure("Read-only mode prevents message changes.", "read_only")
-            return run_write(self, args)
         data = self.cli(args, timeout=900 if "export" in args else 90)
         if "--help" in args and isinstance(data, dict):
             if args[:2] in (["messages", "list"], ["messages", "context"], ["messages", "export"]):
                 data["compatibilityNotes"] = "Plugin reads use Server cursors. --max-pages defaults to 20 (maximum 200); --timeout is milliseconds, default 30000. Message cursor flags still accept message IDs. Context sides are nearest first. Timestamp ties retain Server order."
             elif args[:2] == ["contacts", "show"]:
-                data["compatibilityNotes"] = "Plugin also accepts --query ORIGINAL_SEARCH_TEXT and --max-pages (20 default, 200 maximum including account/search reads). Use an explicit account and exact contact ID to disambiguate."
+                data["compatibilityNotes"] = "Contact selectors are exact IDs by default. Use --by-label for name/phone/handle lookup; --query ORIGINAL_SEARCH_TEXT is an exact-ID hint and cannot combine with --by-label. --max-pages defaults to 20 (200 maximum including account/search reads)."
+            elif args[:2] == ["messages", "search"]:
+                data["compatibilityNotes"] = "Returns data.items plus data.coverage. Dates require timezones and support fractional seconds: --after/--before are inclusive; --before-exclusive makes the upper bound exclusive. Includes low-priority and muted chats by default; --exclude-low-priority/--no-include-muted narrow scope. --max-pages defaults to 20 (maximum 200); --timeout is milliseconds (default 30000)."
         return data
 
     def verify(self, step, matches=False):

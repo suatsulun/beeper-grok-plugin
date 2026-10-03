@@ -26,7 +26,7 @@ class ContactTests(RuntimeFixture):
 
     def test_full_name_and_phone_are_recognized(self):
         for selector in ["Example Person", "+10000000000"]:
-            result, _ = self.show([selector], [[self.account], {"items": [self.contact]}])
+            result, _ = self.show([selector, "--by-label"], [[self.account], {"items": [self.contact]}])
             self.assertEqual(result["contact"]["id"], "opaque-user")
 
     def test_opaque_id_can_be_found_after_first_list_page(self):
@@ -38,7 +38,7 @@ class ContactTests(RuntimeFixture):
 
     def test_multiple_accounts_and_duplicate_names_are_ambiguous(self):
         variants = [
-            ([[self.account], {"items": [self.contact, {**self.contact, "id": "different-user"}]}], ["Example Person"]),
+            ([[self.account], {"items": [self.contact, {**self.contact, "id": "different-user"}]}], ["Example Person", "--by-label"]),
             ([[self.account, {**self.account, "accountID": "network-2"}], {"items": [self.contact]}, {"items": [self.contact]}], ["opaque-user"]),
         ]
         for responses, args in variants:
@@ -68,3 +68,39 @@ class ContactTests(RuntimeFixture):
         with self.assertRaises(Failure) as error:
             self.show(["opaque-user", "--account", "missing"], [[self.account]])
         self.assertEqual(error.exception.code, "account_not_found")
+
+    def test_exact_id_never_falls_back_to_a_name_phone_or_handle(self):
+        for field in ("fullName", "phoneNumber", "username"):
+            for query in ([], ["--query", "Original name"]):
+                collision = {"id": "wrong-person", field: "opaque-user"}
+                with self.subTest(field=field, query=query), self.assertRaises(Failure) as error:
+                    self.show(["opaque-user", *query], [[self.account], {"items": [collision]},
+                              {"items": [collision], "hasMore": False}])
+                self.assertEqual(error.exception.code, "contact_unresolved")
+
+    def test_exact_id_wins_over_colliding_label_in_same_or_other_account(self):
+        collision = {"id": "wrong-person", "fullName": "opaque-user"}
+        result, _ = self.show(["opaque-user", "--query", "Original name"],
+            [[self.account, {**self.account, "accountID": "network-2"}],
+             {"items": [collision, self.contact]}, {"items": [collision]}, {"items": [], "hasMore": False}])
+        self.assertEqual(result["contact"]["id"], "opaque-user")
+        self.assertEqual(result["accountID"], "network-1")
+
+    def test_collision_does_not_stop_exact_id_enumeration(self):
+        collision = {"id": "wrong-person", "fullName": "opaque-user"}
+        result, _ = self.show(["opaque-user"], [[self.account], {"items": [collision]},
+            {"items": [collision], "hasMore": True, "oldestCursor": "page2"},
+            {"items": [self.contact], "hasMore": False}])
+        self.assertEqual(result["contact"]["id"], "opaque-user")
+
+    def test_label_search_walks_remaining_pages_before_claiming_unique(self):
+        with self.assertRaises(Failure) as error:
+            self.show(["Example Person", "--by-label"], [[self.account],
+                {"items": [self.contact], "hasMore": True, "oldestCursor": "next"},
+                {"items": [{**self.contact, "id": "second"}], "hasMore": False}])
+        self.assertEqual(error.exception.code, "ambiguous_contact")
+
+    def test_label_mode_cannot_weaken_a_query_id_constraint(self):
+        with patch.object(self.runtime, "api") as api, self.assertRaises(Failure):
+            self.runtime.command(["contacts", "show", "opaque-user", "--query", "Original", "--by-label"])
+        api.assert_not_called()

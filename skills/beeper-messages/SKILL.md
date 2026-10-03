@@ -15,7 +15,7 @@ python3 "$HELPER" cli chats search 'Alice'
 python3 "$HELPER" cli chats list --account 'ACCOUNT_ID' --unread --limit 20
 python3 "$HELPER" cli messages list --chat 'CHAT_ID' --sender others --limit 10
 python3 "$HELPER" cli messages search 'meeting' --account 'ACCOUNT_ID' --limit 30
-python3 "$HELPER" cli messages search --sender others --after 'ISO_START' --before 'ISO_END' --limit 100
+python3 "$HELPER" cli messages search --sender others --after 'ISO_START' --before 'ISO_END' --before-exclusive --no-exclude-low-priority --include-muted --limit 100
 python3 "$HELPER" cli messages context --chat 'CHAT_ID' --id 'MESSAGE_ID' --before 5 --after 5
 ```
 
@@ -24,6 +24,10 @@ python3 "$HELPER" cli messages context --chat 'CHAT_ID' --id 'MESSAGE_ID' --befo
 History reads de-duplicate boundary rows and fail on bad order, stalled pagination, or an unfound anchor. The default budget is 20 API pages and 30 seconds. `--max-pages` can explicitly raise it to 200; `--timeout` is milliseconds, at most 300000. Deep anchors cost more because the helper locates them from the newest page. On a budget error, narrow to a dated search or raise the budget only as needed. Do not treat failure as an empty inbox or fall back to the broken native cursor path. Reaching `--limit` may mean partial coverage. Search text is literal word matching; retrieve a bounded window for semantic questions.
 
 For “latest messages across WhatsApp and Instagram,” search the requested accounts and time range, sort returned message timestamps, and state coverage. Reading the first chat on each account is only a sample. If filters or ordering cannot establish completeness, say so. Use the user's timezone and distinguish received messages (`--sender others`), their own messages, reactions, and attachments. Empty text on a media message does not mean the message is empty.
+
+In 0.7.4, message search returns `data.items` and `data.coverage`. It uses bounded direct API reads and includes low-priority and muted chats by default. For all-chat scope, explicitly pass `--no-exclude-low-priority --include-muted`; use `--exclude-low-priority` or `--no-include-muted` only when the requested scope calls for those exclusions. Report the effective filters, `limitReached`, and `sourceExhausted`. Exhausting the search index does not establish complete historical sync. If a result limit is reached, increase it within the bounded scope or divide the dated range with overlap and de-duplicate; do not invent search cursor flags.
+
+Search accepts timezone-aware dates with fractional seconds. `--after` and `--before` are inclusive. Use `--before-exclusive` for a daily window ending at the next local midnight. The helper queries a wider whole-second window and filters exact bounds locally; do not strip fractions or manually shift the user's dates. Searches share the 20-request/30-second default and explicit maximum 200-request/300-second budget. Returned timestamp ties retain source order and do not establish causality.
 
 ## Send and reply
 
@@ -70,5 +74,9 @@ For a requested recurring notification, use Grok's actual scheduling facility an
 ## Verify message changes
 
 The helper writes once and performs bounded read-back. Inspect `writeOutcome.state`: `accepted` means the request returned but its effect is not fully verified; `pending` means Server is still sending; `confirmed` means requested fields were observed on Server; `failed` means a reported send failure; `unknown` means insufficient evidence. Confirmation does not establish delivery or recipient reads. Replies must match text, author, and `linkedMessageID`; edits must match the new body. Reactions must match the current account's participant and reaction key. Attachment presence alone does not verify file bytes or voice/sticker subtype. A deletion marker can coexist with retained text; report `textRetained` and never promise remote erasure. Uncertainty does not authorize automatic retries or cleanup deletes.
+
+The helper first checks immediately, then performs up to three read-only rechecks for pending or stale effects within an eight-second observation budget. It never repeats the write. `readAttempts`, `observationExhausted`, and returned message/chat IDs explain what was observed. A matching message can be `confirmed` with `bridgeSendStatus: unavailable`; this means its content was observed, not that a receipt exists. A timeout or `unknown` is not evidence that the operation failed. Reconcile using the returned ID and stop dependent writes while uncertain. Keep the native acknowledgement and observation separate.
+
+The helper parses message values as data, not options. Flag-like text sends/edits use one JSON API write because the official CLI rejects some such strings. Preserve submitted Markdown, mentions, captions, and whitespace verbatim; do not alter content to work around a parser failure. Observation normalizes CRLF/LF only; when Server rewrites rich text, `contentVerified: false` remains explicit rather than stripping formatting or falsely confirming a changed link. Voice/sticker markers can establish a subtype, but never file-byte identity. Local hiding may confirm a local delete; it cannot confirm deletion for everyone. Merged-chat scope mismatches stop observation and require an explicitly resolved member chat.
 
 Inspect documented capability fields, including attachment message types and MIME rules; do not guess top-level voice/sticker keys. Honor explicit rejections. Missing unrelated keys prove neither support nor rejection.

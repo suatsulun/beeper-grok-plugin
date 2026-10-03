@@ -1,5 +1,15 @@
 # Validation
 
+## v0.7.4 review regressions
+
+Contacts must never substitute a label for an exact ID, even with `--query` or cross-account collisions. Explicit `--by-label` retains name/phone/handle lookup and checks all search pages before treating a label as unique.
+
+Write tests cover delayed edits, temporary 404s, pending-to-observed sends, missing optional bridge status, permanent failures, bounded observation time, unchanged write counts, literal flag-like text, repeated mentions, formatting uncertainty, captions, media subtype evidence, local hiding versus deletion for everyone, and unexpected member-chat routing. The official-CLI receiver also checks normal text sends and edits through the real published parser. Some flag-like text is incompatible with that parser: the helper selects a JSON API text/edit path before dispatch, never as a retry.
+
+Search tests cover fractional precision, inclusive boundaries, exclusive next-midnight report ends, timezone conversion, post-filter pagination, repeated SDK-style account parameters, duplicates/ties, low-priority and muted combinations, stalled pages, budget errors, wrong scope, and explicit truncation.
+
+CI runs the synthetic suite on Python 3.10 and 3.13, then the published-CLI integration suite. `tests/prepare_official_cli.py --root /absolute/disk-backed/isolated-directory` downloads and checks the pinned Linux x64 CLI 0.6.2 archive and binary and warms its standalone cache; it never installs a Server or signs in. Follow the host resource checks and heavy-job lock before preparation/tests. Set `BEEPER_TEST_CLI` to that directory's `bin/beeper` and `BEEPER_TEST_CLI_CACHE` to its `cache` for local integration tests. Preparation rejects `/tmp` and an existing targets directory. No account token is needed.
+
 ## v0.7.3 audit regressions
 
 The additional suites exercise real cursor tokens instead of IDs or sort keys, anchors within/between pages, nearest newer messages, context on both sides, timestamp ties, boundary duplicates, cursor cycles, wrong accounts/chats, and bounded failures. One test drives the helper as a subprocess against a synthetic loopback HTTP server and verifies its authenticated requests. No real account is used.
@@ -16,7 +26,7 @@ The tests cover credential isolation, private sign-in, failed or duplicate form 
 
 The review regressions cover short-option target overrides, cross-process lifecycle locking, stopped/stale/live process checks, failed stops, external and symlinked profile backups, incoming verification acceptance, code resend/email correction, ambiguous authentication, cancellation releasing the real job's lock, and errors from the actual Python script entry point. Fake targets now include the real CLI's identity and data-directory fields; stopping an already-stopped fake profile fails just like the published CLI.
 
-Two optional tests exercise an existing isolated official CLI against a local synthetic HTTP receiver. Set `BEEPER_TEST_CLI` to its executable and `BEEPER_TEST_CLI_CACHE` to its already-populated standalone cache, then run the same suite. They check that target overrides cannot forward the synthetic token, a normal accounts read still works, and incoming approval reaches the correct endpoint and request ID. These tests do not download a CLI, install/start a Server, or contact a real account. Without those variables they are skipped.
+The optional published-CLI tests exercise an existing isolated official CLI against a local synthetic HTTP receiver. Set `BEEPER_TEST_CLI` to its executable and `BEEPER_TEST_CLI_CACHE` to its already-populated standalone cache, then run the same suite. They check target isolation, normal reads, incoming verification approval, text arguments, and delayed edit observation. The tests themselves do not download a CLI, install/start a Server, or contact a real account. Without those variables they are skipped; CI has a separate preparation step so its integration job cannot silently skip them.
 
 Release lookup tests cover operation without GitHub's API, no authorization header even when token variables exist, the 15-minute cache, stale/invalid cache rejection, exact release/architecture/filename/digest matching, structured rate-limit/reset information, and ordinary HTTP 403 errors. Update-check tests verify that the native CLI is asked to check Server only, and that a failed CLI lookup is not reported as “up to date.”
 
