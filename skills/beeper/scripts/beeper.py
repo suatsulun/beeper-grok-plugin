@@ -3,6 +3,7 @@
 import argparse
 from contextlib import contextmanager
 import fcntl
+import http.client
 import json
 import os
 from pathlib import Path
@@ -20,7 +21,7 @@ import urllib.parse
 import urllib.request
 
 TARGET = "grok-bot"
-VERSION = "0.7.6"
+VERSION = "0.7.7"
 SETUP = "/v1/app/setup"
 INSTALL_SCOPE = "beeper-cloud-install-v1"
 INSTALL_PROMPT = ("May I install Beeper CLI and Beeper Server on your shared Grok cloud computer? "
@@ -169,6 +170,10 @@ class Runtime:
         return subprocess.CompletedProcess(args, process.returncode, output, errors), expired
 
     def cli(self, args, timeout=90):
+        if args and args[0] == "export" and "--help" not in args:
+            self.writable()  # The published native exporter omits this guard.
+            if "--read-only" in args or "--read-only=true" in args:
+                raise Failure("Read-only mode prevents writing an export.", "read_only")
         result, expired = self.run([*args, "--json"], timeout)
         if expired:
             raise Failure("Beeper timed out. Check the result before retrying any write.", "timeout")
@@ -198,17 +203,25 @@ class Runtime:
         return output.get("data", output) if isinstance(output, dict) else output
 
     def api(self, method, path, body=None, public=False, timeout=30):
+        return self.api_request(method, path, data=json.dumps(body).encode() if body is not None else None,
+                                public=public, timeout=timeout)
+
+    def api_request(self, method, path, data=None, public=False, timeout=30,
+                    content_type="application/json", content_length=None):
+        """One HTTP attempt, including for uploads. Never retry or redirect writes."""
         if method != "GET":
             self.writable()
         target = self.target()
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": content_type}
+        if content_length is not None:
+            headers["Content-Length"] = str(content_length)
         if not public:
             token = target.get("auth", {}).get("accessToken")
             if not token:
                 raise Failure("Sign in to Beeper first.")
             headers["Authorization"] = "Bearer " + token
         request = urllib.request.Request(target["baseURL"].rstrip("/") + path,
-            data=json.dumps(body).encode() if body is not None else None, headers=headers, method=method)
+            data=data, headers=headers, method=method)
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         try:
             with opener.open(request, timeout=timeout) as response:
@@ -218,8 +231,9 @@ class Runtime:
             code = error.code
             error.close()
             raise Failure(f"Beeper API returned HTTP {code}. No response body or submitted value was printed.", code=code) from None
-        except (urllib.error.URLError, TimeoutError, ConnectionError):
-            raise Failure("Beeper Server is unreachable or timed out. Check status before retrying.") from None
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, ValueError):
+            raise Failure("Beeper Server did not return a usable response. The outcome may be unknown; reconcile before retrying.",
+                          "api_response_unavailable") from None
 
     def status(self):
         result = {"pluginVersion": VERSION, "dataDirectory": str(self.root),
@@ -410,6 +424,9 @@ class Runtime:
         if any(a.split("=", 1)[0] in blocked or re.match(r"^-[A-Za-z]", a) for a in args):
             raise Failure("Use long options. Target overrides, debug output, and non-JSON output are disabled.")
         if "--help" not in args:
+            if args[0] == "export":
+                from exports import command
+                return command(self, args)
             if args[:2] == ["messages", "search"]:
                 from search import command
                 return command(self, args)

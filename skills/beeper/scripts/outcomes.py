@@ -1,9 +1,11 @@
 """Dispatch one write and observe its effect using bounded, read-only rechecks."""
 import time
+from itertools import chain, repeat
 from urllib.parse import quote
 
 from beeper import Failure
 from history import chat_id
+from writes import dispatch, validate
 
 OBSERVATION_DELAYS = (0, .5, 1, 2)
 OBSERVATION_SECONDS = 8
@@ -79,28 +81,13 @@ def run_write(runtime, args):
     runtime.writable()
     if flags.get("read-only"):
         raise Failure("Read-only mode prevents message changes.", "read_only")
+    timeout = validate(flags)
     key = "to" if args[0] == "send" else "chat"
     chat = chat_id(runtime, flags[key], int(flags["pick"]) if flags.get("pick") else None)
-    native = ["--" + key + "=" + chat if token.startswith("--" + key + "=") else token for token in native]
     try:
-        # Oclif 0.6.2 rejects some option-looking text even in --message=VALUE.
-        # Select this path before any write; never retry a failed CLI request.
-        if args[1] in {"text", "edit"} and flags["message"].startswith("-"):
-            path = "/v1/chats/" + quote(chat, safe="") + "/messages"
-            body = {"text": flags["message"]}
-            if args[1] == "edit":
-                data = runtime.api("PUT", path + "/" + quote(flags["id"], safe=""), body)
-            else:
-                if "reply-to" in flags:
-                    body["replyToMessageID"] = flags["reply-to"]
-                if "mention" in flags:
-                    body["mentions"] = flags["mention"]
-                if flags.get("no-preview"):
-                    body["disableLinkPreview"] = True
-                reply = runtime.api("POST", path, body)
-                data = {"accepted": True, "state": "accepted", **reply} if isinstance(reply, dict) else reply
-        else:
-            data = runtime.cli(native)
+        # CLI 0.6.2's SDK retries writes on transport/HTTP failures. Bypass that
+        # transport for every message mutation, not only flag-looking text.
+        data = dispatch(runtime, args[1], chat, flags, timeout)
     except Failure as error:
         error.write_outcome = observation("unknown", "Command did not establish its final outcome. Reconcile before retrying.",
                                           chatID=chat, messageID=flags.get("id"))
@@ -121,7 +108,8 @@ def observe(runtime, operation, chat, data, expected):
     if not isinstance(ident, str) or not ident:
         return observation("accepted", "Command returned without a message identifier for observation.", chatID=chat, readAttempts=0)
     known_final_id = (message.get("id") or data.get("id")) if sending else ident
-    deadline = time.monotonic() + OBSERVATION_SECONDS
+    waiting = expected.get("wait", False)
+    deadline = time.monotonic() + (expected.get("wait-timeout", 30000) / 1000 if waiting else OBSERVATION_SECONDS)
     attempts = 0
     accounts_cache = None
     chat_cache = None
@@ -145,7 +133,8 @@ def observe(runtime, operation, chat, data, expected):
             chat_cache = get("/v1/chats/" + quote(chat, safe=""))
         return chat_cache
 
-    for delay in OBSERVATION_DELAYS:
+    delays = chain(OBSERVATION_DELAYS, repeat(1)) if waiting else OBSERVATION_DELAYS
+    for delay in delays:
         if time.monotonic() + delay >= deadline:
             break
         if delay:

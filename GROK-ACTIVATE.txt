@@ -1,4 +1,4 @@
-Beeper 0.7.6 — default shared-cloud onboarding
+Beeper 0.7.7 — default shared-cloud onboarding
 
 Activate this plugin for the user's Grok account, with all five skills: beeper,
 beeper-setup, beeper-messages, beeper-chats, and beeper-reports. Use the native

@@ -25,10 +25,12 @@ class OutcomeTests(RuntimeFixture):
 
     def write(self, args, data=None, rows=None):
         result = data if data is not None else {"accepted": True, "pendingMessageID": "pending-1", "chatID": CHAT}
-        with patch.object(self.runtime, "cli", return_value=result) as cli, \
+        with patch("outcomes.dispatch", return_value=result) as dispatch, \
+                patch.object(self.runtime, "cli") as cli, \
                 patch.object(self.runtime, "api", side_effect=rows or [deepcopy(self.row)]) as api:
             output = self.runtime.command(args)
-        self.assertEqual(cli.call_count, 1)
+        dispatch.assert_called_once()
+        cli.assert_not_called()
         return output["writeOutcome"], api
 
     def test_send_readback_and_reply_link_must_match(self):
@@ -70,10 +72,10 @@ class OutcomeTests(RuntimeFixture):
         outcome, api = self.write(args, rows=[Failure("unreachable")])
         self.assertEqual(outcome["state"], "unknown")
         self.assertEqual(api.call_count, 1)
-        with patch.object(self.runtime, "cli", side_effect=Failure("timeout", "timeout")) as cli:
+        with patch("outcomes.dispatch", side_effect=Failure("timeout", "timeout")) as dispatch:
             with self.assertRaises(Failure) as error:
                 self.runtime.command(args)
-        self.assertEqual(cli.call_count, 1)
+        self.assertEqual(dispatch.call_count, 1)
         self.assertEqual(error.exception.write_outcome["state"], "unknown")
 
     def test_reactions_require_own_identity_and_key(self):

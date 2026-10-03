@@ -68,7 +68,8 @@ elif args[:2]==['messages','list']:
  data={'tokenUsed':os.environ.get('BEEPER_ACCESS_TOKEN'),'config':os.environ['BEEPER_CLI_CONFIG_DIR'],'envTarget':os.environ['BEEPER_TARGET']}
 elif args[:2]==['messages','export']:
  Path(args[args.index('--output')+1]).write_text('[]');sys.exit(0)
-elif args[0]=='export': print('Exported synthetic data');sys.exit(0)
+elif args[0]=='export':
+ out=Path(args[args.index('--out')+1]);save(out/'manifest.json',{'chatCount':1,'messageCount':2,'attachmentCount':0});save(out/'.beeper-export-state.json',{'chats':{}});print('Exported synthetic data');sys.exit(0)
 elif args[0]=='watch':
  if (root/'fail-watch').exists():sys.exit(1)
  if (root/'child-watch').exists():
@@ -745,6 +746,45 @@ class PublishedCLITests(RuntimeFixture):
             self.assertEqual(result["writeOutcome"]["checks"]["chatSelfIdentityMatches"], operation == "react")
             self.assertFalse(result["writeOutcome"]["checks"]["accountIdentityMatches"])
         self.assertEqual([method for method, _, _ in self.received if method != "GET"], ["POST", "DELETE"])
+
+    def test_full_export_readonly_scope_changes_and_explicit_rebuild(self):
+        self.point_primary_at_receiver()
+        chat = "!self:synthetic"
+        detail = {"id": chat, "accountID": "network", "title": "Synthetic", "type": "single", "participants": {"items": []}}
+        def respond(method, path, body):
+            route = urlsplit(path).path
+            if route == "/v1/accounts":
+                return [{"accountID": "network", "user": {"id": "self"}}]
+            if route == "/v1/chats":
+                return {"items": [detail], "hasMore": False}
+            if route.endswith("/messages"):
+                return {"items": [{"id": str(i), "chatID": chat, "accountID": "network", "isSender": True,
+                                   "text": "synthetic", "sortKey": str(i), "timestamp": "2026-10-04T10:00:00Z"}
+                                  for i in range(6, 0, -1)], "hasMore": False}
+            return detail
+        self.respond = respond
+        output = self.root / "snapshot"
+        args = ["export", "--out", str(output), "--no-attachments", "--quiet"]
+        with patch.dict(os.environ, {"BEEPER_READONLY": "1"}), self.assertRaises(Failure):
+            self.runtime.command(args)
+        with self.assertRaises(Failure):
+            self.runtime.command([*args, "--read-only"])
+        self.assertEqual(self.received, [])
+        self.assertFalse(output.exists())
+        limited = self.runtime.command([*args, "--limit-messages", "2"])
+        self.assertEqual(limited["messageCount"], 2)
+        self.assertTrue(limited["coverage"]["limitReached"])
+        before = len(self.received)
+        with self.assertRaises(Failure) as error:
+            self.runtime.command(args)
+        self.assertEqual(error.exception.code, "export_scope_changed")
+        self.assertEqual(len(self.received), before)
+        full = self.runtime.command([*args, "--force"])
+        self.assertEqual(full["messageCount"], 6)
+        self.assertFalse(full["coverage"]["limitsApplied"])
+        files = list((output / "chats").glob("*/messages.json"))
+        self.assertEqual(len(files), 1)
+        self.assertEqual(len(json.loads(files[0].read_text())), 6)
 
 
 class Response(io.BytesIO):

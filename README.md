@@ -19,7 +19,7 @@ This version deliberately covers **existing accounts**. Adding networks, provide
 
 ## What's inside
 
-Five skills: Beeper routing, setup, messages, chats, and reports. Seven Python standard-library modules install the official CLI, preserve one cloud profile, provide private sign-in, and repair specific messaging compatibility issues. Native CLI commands remain available through the helper; bounded history, search, and contact-detail reads use the authenticated loopback API directly. No JavaScript browser stack, MCP service, package dependencies, or unattended install hooks.
+Five skills: Beeper routing, setup, messages, chats, and reports. Nine Python standard-library modules install the official CLI, preserve one cloud profile, provide private sign-in, and repair specific messaging compatibility issues. Native CLI commands remain available through the helper; bounded history, search, contact-detail reads, and message mutations use the authenticated loopback API directly. No JavaScript browser stack, MCP service, package dependencies, or unattended install hooks.
 
 Data stays outside the plugin at `/workspace/.beeper-grok`. Existing `grok-bot` profiles from the 0.6.x plugin are reused. Updating this source alone does not change Server or sign anyone out. “Update Beeper” checks official releases, keeps the old CLI, backs up a stopped Server's profile and program, and runs the official updater. It never patches Beeper binaries or resets account data.
 
@@ -31,7 +31,16 @@ As checked on **28 September 2026**, the latest published CLI is **0.6.2**. The 
 
 ## Install and development
 
-### v0.7.6 shared cloud onboarding — candidate
+### v0.7.7 message transport and export fixes — candidate
+
+- Sends (including files, voice and stickers), edits, reactions/removals, and message deletes use the helper's non-retrying HTTP transport. CLI 0.6.2's SDK could retry a single CLI invocation up to three HTTP submissions; invoking that CLI only once did not prevent duplicate sends. File uploads stream multipart data without loading the entire file into memory. No CLI or Server binary is patched.
+- A successful send acknowledgement, including its pending message ID, remains in the result while read-back runs. A read timeout returns `writeOutcome: unknown` with that ID; it never resends. Default observation is up to four reads/eight seconds. `--wait` permits continued reads for up to 30 seconds, adjustable with `--wait-timeout` (milliseconds, maximum 300000). `--timeout` controls each write request (default 30 seconds, maximum five minutes).
+- Full export enforces `BEEPER_READONLY` and `--read-only` before any output creation or CLI/API call. The helper records export scope, serializes writes to the same output, checks the manifest, and returns counts and coverage.
+- Changing export limits/content options cannot silently reuse completed native checkpoints. Use a new output directory, or explicitly rebuild the same account/chat selection with `--force`. Changed account/chat selection or a legacy directory with no scope record requires a new directory. Same-scope interrupted exports remain resumable. `--force` resets the known checkpoint so old counts are not carried into a rebuilt snapshot.
+
+These fixes retain the existing account scope. No login/logout or provider-connection flows were added. HTTP fault tests and the official CLI export test use synthetic data only; live deployment and acceptance are separate.
+
+### v0.7.6 shared cloud onboarding
 
 - Activation/first use checks `onboard`, a read-only local installation plan. New installations require consent before downloads or filesystem changes. `setup --approved` records that consent and installs official CLI and Server; an interrupted installation can resume without a second prompt.
 - Every skill uses the same `/workspace/.beeper-grok` home and `grok-bot` target. There is no automatic local-home fallback. Older installations and their account state are reused without another installation prompt, and an already-running Server is not started again. Missing files associated with an existing profile stop for repair before downloads.
@@ -48,7 +57,7 @@ The 0.7.5 matcher was verified against the already-present WhatsApp reaction usi
 ### v0.7.4 review fixes
 
 - Contact IDs are exact and case-sensitive, including with an original `--query` hint. A colliding name/phone/handle cannot substitute for the requested person. Name/phone/handle lookup remains available through explicit `--by-label`; multiple matches require disambiguation.
-- Message writes execute once. An immediate read can finish quickly; pending/stale effects receive up to three read-only rechecks within an eight-second observation budget. Results keep message IDs, attempt counts, content evidence, bridge status, and receipt limitations separate. Missing optional `sendStatus` does not prevent confirmation of matching Server content.
+- The helper invokes each write once; v0.7.7 also prevents retries inside the HTTP transport. An immediate read can finish quickly; pending/stale effects receive up to three read-only rechecks within an eight-second observation budget. Results keep message IDs, attempt counts, content evidence, bridge status, and receipt limitations separate. Missing optional `sendStatus` does not prevent confirmation of matching Server content.
 - Message search uses whole-second API queries widened around the requested timezone-aware dates, then filters the exact fractional-second boundaries locally. `--after` and `--before` are inclusive; `--before-exclusive` supports daily `[start, next midnight)` windows. Results are now `{items, coverage}` inside `data`, including effective filters, index exhaustion, and truncation. Search includes low-priority and muted chats unless explicitly excluded.
 - Write argument parsing understands option arity, repeated mentions, and literal values that look like flags. The official CLI rejects some flag-like text values, so those text sends/edits use one JSON API write selected before dispatch. Target overrides remain blocked. Rich text is never flattened to fabricate a match; differing Server representations remain explicitly unverified. Merged-chat scope mismatches stop safely; select an explicit network member chat.
 
@@ -58,10 +67,10 @@ The 0.7.5 matcher was verified against the already-present WhatsApp reaction usi
 - Known full chat IDs avoid a CLI process for history reads. Recent windows usually need one HTTP request. Deep anchors require scanning from the newest page; this is a correctness tradeoff, not constant-time random access. Default bounds are 20 pages/30 seconds, explicitly adjustable to 200 pages/300 seconds. A budget failure is never returned as empty or complete history.
 - Contact details use search and bounded enumeration, recognize full names/phones/usernames, and reject ambiguous matches. `--query ORIGINAL_SEARCH_TEXT` resolves a returned opaque ID when the network cannot search it directly. Limited enumeration can still leave a contact unresolved.
 - Errors retain safe classifications and fixed explanations without printing identifiers or upstream free-form text. Idle verification checks no longer write null snapshots; confirmation still validates the live comparison.
-- Message writes run once and return `writeOutcome` after bounded read-back: accepted, pending, confirmed, failed, or unknown. Confirmation covers observed Server state, not delivery/read receipts or remote erasure. Tombstones report retained text. Attachment bytes/subtypes and failed read-backs stay unverified. Native result fields remain present.
+- Message writes return `writeOutcome` after bounded read-back: accepted, pending, confirmed, failed, or unknown. Confirmation covers observed Server state, not delivery/read receipts or remote erasure. Tombstones report retained text. Attachment bytes/subtypes and failed read-backs stay unverified. Native result fields remain present.
 - Skills avoid repeated discovery calls, distinguish unanswered questions from unfinished work, and preserve uncertainty about timestamp ties, capability support, and diagnostic health.
 
-These changes use official CLI/Server installations without binary patches. The separate native multi-chat export retains upstream behavior; a successful export cannot establish that Server has all historical messages. Tests use synthetic data, including a real loopback HTTP receiver; live account acceptance must still be performed on Grok. See [validation](tests/README.md) and [the Grok handoff](GROK-TEST.txt).
+These changes use official CLI/Server installations without binary patches. The guarded multi-chat export still uses the native exporter; a successful export cannot establish that Server has all historical messages. Tests use synthetic data, including a real loopback HTTP receiver; live account acceptance must still be performed on Grok. See [validation](tests/README.md) and [the Grok handoff](GROK-TEST.txt).
 
 The API contract is documented by [Beeper's message endpoint](https://developers.beeper.com/desktop-api-reference/php/resources/messages/methods/list/), [pagination implementation](https://github.com/beeper/desktop-api-js/blob/next/src/core/pagination.ts), and [contact endpoints](https://github.com/beeper/desktop-api-js/blob/next/src/resources/accounts/contacts.ts). IDs and sort keys are not substituted for opaque page tokens.
 

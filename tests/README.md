@@ -1,5 +1,13 @@
 # Validation
 
+## v0.7.7 transport and full-export regressions
+
+`test_write_transport.py` counts actual loopback HTTP requests under 500/503/429/408 responses and dropped connections, across sends, edits, deletions, and reactions/removals. It checks retained pending IDs after read-back expiry; delayed read resolution without resending; endpoint encoding and text/reply/mention/transaction options; multipart upload bytes, UTF-8 filename metadata, voice/sticker subtype metadata; and no message submission after a failed upload. These tests do not need an installed CLI.
+
+`test_exports.py` checks read-only rejection before CLI/API/filesystem effects, changed limits/content scope, legacy unknown checkpoints, explicit rebuilds without stale counts, same-scope interrupted resumes, manifest validation, profile protection, and concurrent-output locking. The additional `PublishedCLITests` case runs official CLI 0.6.2 against a synthetic receiver: export two of six messages, reject an unsafe unlimited resume, then explicitly rebuild and verify all six JSON records. The optional published-CLI class now has six tests; skipped tests remain untested, not passes.
+
+Message writes now bypass the CLI transport. Earlier observer fixtures still test read-back decisions separately; counting one mocked dispatch is not evidence that the HTTP layer sends once. The new fault tests check that boundary directly. No login/logout flow was added or changed by this release.
+
 ## v0.7.6 onboarding regressions
 
 `test_onboarding.py` exercises missing-installation consent with zero pre-approval filesystem/process/network effects; a synthetic approved CLI/Server install; resumption after an interrupted install; another runtime reusing the same target; legacy account/profile preservation without a consent marker; stopped-versus-running Server behavior; consent scope/root matching; concurrent setup locks; repair checks before downloads; script entry-point output; a fixed cloud home independent of client home or working directory; and helper/manifest version alignment. Installer and network dependencies are synthetic. A passing fixture cannot prove that Grok Bot emits an install-time event, registers the five skills, or discovers them in a fresh conversation. Record those host checks separately.
@@ -8,7 +16,7 @@
 
 The sanitized WhatsApp reproduction uses different account and chat self IDs. Tests check confirmation through the explicitly marked chat self, legacy account-ID matching, exact emoji keys, other people's reactions, wrong chat/account scope, contradictory self flags, missing/malformed state, delayed reactions with cached identity reads, and removal while either own identity still reacts. When the chat self is unavailable, an unmatched reaction with the requested key cannot establish removal. An empty valid reaction list can establish absence with a known account identity.
 
-One additional published-CLI test sends and removes a synthetic reaction through official CLI 0.6.2 against a loopback HTTP receiver. A read-only reconciliation test calls the same observer without dispatching any write. These tests do not contact WhatsApp. `GROK-TEST.txt` gives the exact GET-only recheck for the already-present live reaction; repeating a send is not needed for acceptance of this matcher fix.
+One additional published-CLI test sends and removes a synthetic reaction through official CLI 0.6.2 against a loopback HTTP receiver. A read-only reconciliation test calls the same observer without dispatching any write. These tests do not contact WhatsApp. The earlier 0.7.5 acceptance used a GET-only recheck for the already-present live reaction; repeating a send is not needed for acceptance of this matcher fix.
 
 ## v0.7.4 review regressions
 
