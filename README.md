@@ -17,7 +17,7 @@ This version deliberately covers **existing accounts**. Adding networks, provide
 
 ## What's inside
 
-Five short skills: Beeper routing, setup, messages, chats, and reports. Three Python standard-library files install the official CLI, preserve one cloud profile, keep credentials out of tool output, and provide private sign-in. Messaging uses native CLI commands, with small compatibility fixes for 0.6.2's verification IDs and archive endpoint. No JavaScript browser stack, MCP service, package dependencies, or install hooks.
+Five skills: Beeper routing, setup, messages, chats, and reports. Six Python standard-library modules install the official CLI, preserve one cloud profile, provide private sign-in, and repair specific messaging compatibility issues. Native CLI commands remain available through the helper; bounded history and contact-detail reads use the authenticated loopback API directly. No JavaScript browser stack, MCP service, package dependencies, or install hooks.
 
 Data stays outside the plugin at `/workspace/.beeper-grok`. Existing `grok-bot` profiles from the 0.6.x plugin are reused. Updating this source alone does not change Server or sign anyone out. “Update Beeper” checks official releases, keeps the old CLI, backs up a stopped Server's profile and program, and runs the official updater. It never patches Beeper binaries or resets account data.
 
@@ -28,6 +28,21 @@ Data stays outside the plugin at `/workspace/.beeper-grok`. Existing `grok-bot` 
 As checked on **28 September 2026**, the latest published CLI is **0.6.2**. The CLI's Server nightly feed reports **4.3.156**; the separate stable feed reports **4.3.152**. Beeper's installer currently uses the nightly feed for Server while the account still signs into production. These are release checks, not a claim that a user's cloud installation has already been updated.
 
 ## Install and development
+
+### v0.7.3 audit fixes
+
+- Message list, context, and per-chat export follow **opaque cursors returned by Server**. CLI 0.6.2 passes message IDs as cursors; the helper instead locates the ID while walking real pages. It retains Server ordering for timestamp ties, removes duplicate boundary rows, and rejects stalled or non-chronological pagination. Context includes the center and nearest messages on each side.
+- Known full chat IDs avoid a CLI process for history reads. Recent windows usually need one HTTP request. Deep anchors require scanning from the newest page; this is a correctness tradeoff, not constant-time random access. Default bounds are 20 pages/30 seconds, explicitly adjustable to 200 pages/300 seconds. A budget failure is never returned as empty or complete history.
+- Contact details use search and bounded enumeration, recognize full names/phones/usernames, and reject ambiguous matches. `--query ORIGINAL_SEARCH_TEXT` resolves a returned opaque ID when the network cannot search it directly. Limited enumeration can still leave a contact unresolved.
+- Errors retain safe classifications and fixed explanations without printing identifiers or upstream free-form text. Idle verification checks no longer write null snapshots; confirmation still validates the live comparison.
+- Message writes run once and return `writeOutcome` after bounded read-back: accepted, pending, confirmed, failed, or unknown. Confirmation covers observed Server state, not delivery/read receipts or remote erasure. Tombstones report retained text. Attachment bytes/subtypes and failed read-backs stay unverified. Native result fields remain present.
+- Skills avoid repeated discovery calls, distinguish unanswered questions from unfinished work, and preserve uncertainty about timestamp ties, capability support, and diagnostic health.
+
+These changes use official CLI/Server installations without binary patches. The separate native multi-chat export retains upstream behavior; a successful export cannot establish that Server has all historical messages. Tests use synthetic data, including a real loopback HTTP receiver; live account acceptance must still be performed on Grok. See [validation](tests/README.md) and [the Grok handoff](GROK-TEST.txt).
+
+The API contract is documented by [Beeper's message endpoint](https://developers.beeper.com/desktop-api-reference/php/resources/messages/methods/list/), [pagination implementation](https://github.com/beeper/desktop-api-js/blob/next/src/core/pagination.ts), and [contact endpoints](https://github.com/beeper/desktop-api-js/blob/next/src/resources/accounts/contacts.ts). IDs and sort keys are not substituted for opaque page tokens.
+
+### Installing the plugin source
 
 This is a Grok plugin with `.grok-plugin/plugin.json` and `skills/`. For local development, Grok's CLI accepts `grok plugin install /absolute/path/to/project`. Distribution through a marketplace requires its own review and a published source revision; this local rewrite is not a marketplace release. Plugin installation itself is passive. Official binaries are downloaded only when the user asks Grok to set up or update Beeper.
 

@@ -1,5 +1,15 @@
 # Validation
 
+## v0.7.3 audit regressions
+
+The additional suites exercise real cursor tokens instead of IDs or sort keys, anchors within/between pages, nearest newer messages, context on both sides, timestamp ties, boundary duplicates, cursor cycles, wrong accounts/chats, and bounded failures. One test drives the helper as a subprocess against a synthetic loopback HTTP server and verifies its authenticated requests. No real account is used.
+
+Contact tests cover exact identity, original-search hints, contacts after page one, ambiguous names/accounts, and incomplete enumeration. Outcome tests check reply linkage, changed text, own reactions, pending/failed sends, read-back failures, and retained deletion text, with exactly one CLI write invocation and no retry. Export tests cover inclusive timezone-aware bounds, atomic replacement, private permissions, budget failures, and profile/read-only protection. Verification tests preserve live-comparison guards while checking idle/read-only cache behavior. Existing setup/update/sign-in tests must still pass.
+
+These tests do not prove that the user's bridge implements every feature. In particular, a fixture passing does not establish real delivery, message history completeness, media-byte identity, or a model's summary accuracy. The optional official-CLI integration tests are counted as skipped when no isolated published CLI is supplied. See `GROK-TEST.txt` for bounded live acceptance of the candidate source without updating or resetting the account.
+
+For report-skill evaluation, give the model an independently prepared transcript and request a real summary. Score answers without reply links, ambiguous answers, corrections, equal timestamps, duplicates, pending tasks versus completed tasks, unreadable attachments, and embedded instructions. Record whether the model saw expected answers and whether the session was fresh. Assertions in a custom summarizing script are not a model evaluation.
+
 Run `python3 -m unittest discover -s tests -v` with the existing Python runtime. Fixtures live in temporary disk-backed directories under the repository and are removed afterward. No real credentials, browser profiles, account changes, or message sends are involved.
 
 The tests cover credential isolation, private sign-in, failed or duplicate form submissions, recovery, registration refusal, download integrity, preserving an existing profile, update backups/restart behavior, command scope, and bounded message events. They test behavior at CLI/HTTP boundaries, not every upstream network capability.

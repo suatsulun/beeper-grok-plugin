@@ -19,7 +19,9 @@ python3 "$HELPER" cli messages search --sender others --after 'ISO_START' --befo
 python3 "$HELPER" cli messages context --chat 'CHAT_ID' --id 'MESSAGE_ID' --before 5 --after 5
 ```
 
-`messages list` is newest first; `--asc` reverses it. Continue older messages with `--before-cursor MESSAGE_ID`; use IDs actually returned and de-duplicate pages. The CLI follows API pagination up to `--limit`. Reaching that limit means the result may be partial. Search text is a literal word search, not arbitrary semantic search. If needed, retrieve a bounded window and reason over it.
+`messages list` is newest first; `--asc` reverses the selected window, not the entire history. Continue older messages with `--before-cursor MESSAGE_ID`; `--after-cursor` selects the nearest newer messages. The helper locates the returned ID by following Server-issued opaque cursors; it never treats IDs or sort keys as cursors. Context includes the center and returns each side nearest first. Timestamp ties retain Server order, which does not establish causal order.
+
+History reads de-duplicate boundary rows and fail on bad order, stalled pagination, or an unfound anchor. The default budget is 20 API pages and 30 seconds. `--max-pages` can explicitly raise it to 200; `--timeout` is milliseconds, at most 300000. Deep anchors cost more because the helper locates them from the newest page. On a budget error, narrow to a dated search or raise the budget only as needed. Do not treat failure as an empty inbox or fall back to the broken native cursor path. Reaching `--limit` may mean partial coverage. Search text is literal word matching; retrieve a bounded window for semantic questions.
 
 For “latest messages across WhatsApp and Instagram,” search the requested accounts and time range, sort returned message timestamps, and state coverage. Reading the first chat on each account is only a sample. If filters or ordering cannot establish completeness, say so. Use the user's timezone and distinguish received messages (`--sender others`), their own messages, reactions, and attachments. Empty text on a media message does not mean the message is empty.
 
@@ -64,3 +66,9 @@ python3 "$HELPER" watch --chat 'CHAT_ID' --seconds 30
 This returns message update events from that window, not a guaranteed complete history. An upsert can update an old message or be one of the user's own sends. Fetch the referenced message, check sender and timestamp, and de-duplicate by account/chat/message ID before calling it newly received. Reconcile after gaps with normal message reads. Zero events means none observed in that window, not an empty inbox.
 
 For a requested recurring notification, use Grok's actual scheduling facility and save a per-task checkpoint outside the plugin checkout. Read overlapping time windows and de-duplicate so restarts don't lose or repeat messages. Do not leave endless polling jobs, invent a scheduler, promise notifications while no job is scheduled, or forward message events to an external webhook without explicit authorization.
+
+## Verify message changes
+
+The helper writes once and performs bounded read-back. Inspect `writeOutcome.state`: `accepted` means the request returned but its effect is not fully verified; `pending` means Server is still sending; `confirmed` means requested fields were observed on Server; `failed` means a reported send failure; `unknown` means insufficient evidence. Confirmation does not establish delivery or recipient reads. Replies must match text, author, and `linkedMessageID`; edits must match the new body. Reactions must match the current account's participant and reaction key. Attachment presence alone does not verify file bytes or voice/sticker subtype. A deletion marker can coexist with retained text; report `textRetained` and never promise remote erasure. Uncertainty does not authorize automatic retries or cleanup deletes.
+
+Inspect documented capability fields, including attachment message types and MIME rules; do not guess top-level voice/sticker keys. Honor explicit rejections. Missing unrelated keys prove neither support nor rejection.

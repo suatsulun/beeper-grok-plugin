@@ -1,0 +1,59 @@
+Beeper Grok plugin 0.7.3 — candidate acceptance
+
+Use the attached plugin source to test the audit fixes. Preserve the current
+official CLI, running Server, target, and account/profile. This source update
+does not require setup, sign-in, a Server update, or a binary patch.
+
+1. Extract the archive to a new persistent directory on Grok's cloud computer,
+   outside the existing plugin and Beeper profile. Read README.md and the five
+   SKILL.md files. Use this candidate's absolute helper path. Keep the established
+   BEEPER_PLUGIN_HOME unchanged. Record version 0.7.3 and the supplied hashes.
+
+2. Inspect and run the isolated offline suite from the extracted plugin directory:
+   env -u BEEPER_PLUGIN_HOME -u BEEPER_READONLY python3 -m unittest discover -s tests -v
+   Tests create their own synthetic profiles and do not contact an account.
+   Respect the host's resource limits; do not run concurrent heavy jobs. If grok
+   plugin validate is available, run it. Report unavailable validators and
+   optional official-CLI skips explicitly, not as passes.
+
+3. For live diagnostics set BEEPER_READONLY=1. Reuse the same target and known
+   chat from the October 3 audit. Run status once, then:
+   - Read 20 newest messages.
+   - Request 20 older messages using the last returned message ID.
+   - Compare that boundary against a small dated search window. Use IDs and
+     timestamps as evidence; keep message bodies out of diagnostic artifacts.
+   - Check context of a message inside the first page against neighbors on that
+     page. Each side is nearest first. Equal timestamps retain server order.
+   - Verify no duplicates, correct account/chat, chronology, and no skipped known
+     neighbors. An empty result or a budget error is not proof of completeness.
+   - Recheck one contact from search with contacts show ID --account ACCOUNT_ID.
+     If the network cannot resolve the ID, add --query ORIGINAL_SEARCH_TEXT.
+     Do not pick another contact or broaden account scope silently.
+   - If verification is idle, an optional verify show must not create/change its
+     comparison file. Do not start verification or display/cache an active SAS
+     in this read-only acceptance pass.
+
+4. Time one known-chat read: first call plus five sequential repeats. Report
+   result counts, median/range, and total helper wall time. Do not claim a CLI,
+   API, or model-time breakdown unless separately measured. Deep history anchors
+   require more requests than a newest-page read.
+
+5. Return a concise pass/fail/blocked matrix with sanitized evidence. Include the
+   exact installed CLI/Server versions and state any differences from the earlier
+   audit. Stop on a cursor/order error; do not bypass the helper or fall back to
+   native broken cursor handling. No sends, edits, reactions, deletions, typing,
+   exports, downloads, chat changes, setup, update, or profile manipulation are
+   authorized by this acceptance prompt. Cleanup is also a write.
+
+6. After this read-only acceptance, present a concrete, separate live-write plan
+   for the user's approval, using only their verified self-chat and exact test
+   content. Observe writeOutcome rather than treating exit success as confirmation.
+   Check text, author, reply linkage, edited body, own reaction, and deletion
+   markers. Never retry an unknown send blindly. Do not erase audit evidence or
+   promise that a deletion removed remote copies. Capture original settings before
+   any authorized reversible changes and restore those exact values.
+
+Only after acceptance, use Grok's supported plugin install/reload mechanism to
+activate this source for later sessions. Keep the old source available for source
+rollback; do not roll back Server binaries or databases. If the current Grok UI
+cannot reload a plugin, explain that limitation instead of claiming it is active.

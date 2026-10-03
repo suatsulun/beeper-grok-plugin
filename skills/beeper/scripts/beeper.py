@@ -20,7 +20,7 @@ import urllib.parse
 import urllib.request
 
 TARGET = "grok-bot"
-VERSION = "0.7.2"
+VERSION = "0.7.3"
 SETUP = "/v1/app/setup"
 
 
@@ -28,6 +28,41 @@ class Failure(Exception):
     def __init__(self, message, code=None):
         super().__init__(message)
         self.code = code
+
+
+def cli_failure(decoded, exit_code):
+    """Classify errors using fixed explanations; never echo free-form CLI text.
+
+    Error strings can include contact IDs, message bodies and credentials, so
+    pattern-based redaction of the raw string is not a sufficient boundary.
+    """
+    decoded = decoded if isinstance(decoded, dict) else {}
+    error = decoded.get("error", {})
+    message = error.get("message", "") if isinstance(error, dict) else error
+    message = message if isinstance(message, str) else ""
+    reason = "Check command --help and the requested scope."
+    kind = decoded.get("kind")
+    code = kind if isinstance(kind, str) and kind in {"abort", "auth", "validation", "network", "bug", "usage"} else "cli_error"
+    supplied_code = error.get("code") if isinstance(error, dict) else None
+    if isinstance(supplied_code, str) and supplied_code in {"http_error", "network_error", "timeout", "not_found", "unauthorized",
+                         "forbidden", "conflict", "unsupported", "rate_limited", "invalid_arguments"}:
+        code = supplied_code
+    elif isinstance(supplied_code, str) and re.fullmatch(r"http_[45]\d\d", supplied_code):
+        code = supplied_code
+    for prefix, category, explanation in (
+        ("contact not found", "contact_not_found", "The contact lookup did not resolve that selector. Use contact search and verify its account."),
+        ("message not found", "message_not_found", "The message is not currently available on the selected chat."),
+        ("chat not found", "chat_not_found", "The chat lookup did not resolve that selector."),
+    ):
+        if message.lower().startswith(prefix):
+            code, reason = category, explanation
+            break
+    if "timed out" in message.lower():
+        code, reason = "timeout", "The outcome may be unknown. Read back the result before retrying a write."
+    http = re.search(r"(?:HTTP|returned) ([45]\d\d)\b", message, re.I)
+    if http:
+        code, reason = "http_" + http[1], "Server rejected the request. Check access and the requested operation."
+    return Failure(f"Beeper command failed (exit {exit_code}, code {code}). {reason}", code)
 
 
 def read_json(path):
@@ -131,7 +166,7 @@ class Runtime:
     def cli(self, args, timeout=90):
         result, expired = self.run([*args, "--json"], timeout)
         if expired:
-            raise Failure("Beeper timed out. Check the result before retrying any write.")
+            raise Failure("Beeper timed out. Check the result before retrying any write.", "timeout")
         result.stdout = result.stdout.decode("utf-8", errors="replace")
         if result.returncode:
             # Upstream errors may echo a submitted secret or message. Keep diagnostics
@@ -140,20 +175,11 @@ class Runtime:
                 # Released CLI failures are JSON on stderr, unlike success data.
                 decoded = json.loads(result.stdout or result.stderr)
                 # These diagnostics deliberately exit nonzero when not ready/reachable.
-                if (args[0] == "doctor" or args[:2] == ["targets", "status"]) and decoded.get("success") is True:
+                if isinstance(decoded, dict) and (args[0] == "doctor" or args[:2] == ["targets", "status"]) and decoded.get("success") is True:
                     return decoded["data"]
-                error = decoded.get("error", {})
-                code = error.get("code", "unknown") if isinstance(error, dict) else "unknown"
-                message = error.get("message", "") if isinstance(error, dict) else str(error)
-                if "timed out" in message.lower():
-                    code = "timeout"
-                http = re.search(r"(?:HTTP|returned) ([45]\d\d)\b", message, re.I)
-                if http:
-                    code = "http_" + http[1]
             except ValueError:
-                code = "unknown"
-            code = code if re.fullmatch(r"[a-zA-Z0-9_-]{1,60}", str(code)) else "unknown"
-            raise Failure(f"Beeper command failed (exit {result.returncode}, code {code}). Check status and command --help.")
+                decoded = {}
+            raise cli_failure(decoded, result.returncode)
         if "--help" in args:
             return {"help": result.stdout}
         if args[0] == "export" or (args[:2] == ["messages", "export"] and not result.stdout.strip()):
@@ -163,10 +189,10 @@ class Runtime:
         except ValueError:
             raise Failure("Beeper returned unexpected output. Raw output was withheld.") from None
         if isinstance(output, dict) and output.get("success") is False:
-            raise Failure("Beeper reported failure. Check status before retrying.")
+            raise cli_failure(output, result.returncode)
         return output.get("data", output) if isinstance(output, dict) else output
 
-    def api(self, method, path, body=None, public=False):
+    def api(self, method, path, body=None, public=False, timeout=30):
         if method != "GET":
             self.writable()
         target = self.target()
@@ -180,7 +206,7 @@ class Runtime:
             data=json.dumps(body).encode() if body is not None else None, headers=headers, method=method)
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         try:
-            with opener.open(request, timeout=30) as response:
+            with opener.open(request, timeout=timeout) as response:
                 data = response.read()
             return json.loads(data) if data else {}
         except urllib.error.HTTPError as error:
@@ -321,6 +347,13 @@ class Runtime:
         # Only long options: short clusters such as -qtother can hide a target override.
         if any(a.split("=", 1)[0] in blocked or re.match(r"^-[A-Za-z]", a) for a in args):
             raise Failure("Use long options. Target overrides, debug output, and non-JSON output are disabled.")
+        if "--help" not in args:
+            if args[:2] in (["messages", "list"], ["messages", "context"], ["messages", "export"]):
+                from history import command
+                return command(self, args)
+            if args[:2] == ["contacts", "show"]:
+                from contacts import show
+                return show(self, args)
         if args[:2] in (["chats", "archive"], ["chats", "unarchive"]) and "--help" not in args:
             # CLI 0.6.2 uses the wrong archive endpoint; this is the official
             # endpoint already used by the SDK and the unreleased upstream fix.
@@ -336,14 +369,30 @@ class Runtime:
             archived = args[1] == "archive"
             self.api("POST", "/v1/chats/" + urllib.parse.quote(chat_id, safe="") + "/archive", {"archived": archived})
             return {"chatID": chat_id, "archived": archived}
-        return self.cli(args, timeout=900 if "export" in args else 90)
+        from outcomes import is_message_write, run_write
+        if "--help" not in args and is_message_write(args):
+            self.writable()
+            if "--read-only" in args or "--read-only=true" in args:
+                raise Failure("Read-only mode prevents message changes.", "read_only")
+            return run_write(self, args)
+        data = self.cli(args, timeout=900 if "export" in args else 90)
+        if "--help" in args and isinstance(data, dict):
+            if args[:2] in (["messages", "list"], ["messages", "context"], ["messages", "export"]):
+                data["compatibilityNotes"] = "Plugin reads use Server cursors. --max-pages defaults to 20 (maximum 200); --timeout is milliseconds, default 30000. Message cursor flags still accept message IDs. Context sides are nearest first. Timestamp ties retain Server order."
+            elif args[:2] == ["contacts", "show"]:
+                data["compatibilityNotes"] = "Plugin also accepts --query ORIGINAL_SEARCH_TEXT and --max-pages (20 default, 200 maximum including account/search reads). Use an explicit account and exact contact ID to disambiguate."
+        return data
 
     def verify(self, step, matches=False):
         comparison_file = self.root / "verification-comparison.json"
         current = self.cli(["verify", "show"])
         if step == "show":
-            write_json(comparison_file, current)
+            if (isinstance(current, dict) and current.get("id") and current.get("sas")
+                    and current.get("state") not in ("done", "cancelled", "error")
+                    and os.environ.get("BEEPER_READONLY", "").lower() not in ("1", "true", "yes", "on")):
+                write_json(comparison_file, {"id": current["id"], "sas": current["sas"]})
             return current
+        self.writable()
         if step == "start" and current and current.get("state") not in ("done", "cancelled", "error"):
             return current
         if step == "approve" and (not current or "accept" not in current.get("availableActions", [])):
@@ -351,6 +400,8 @@ class Runtime:
         if step == "sas-confirm":
             shown = read_json(comparison_file) or {}
             if (not matches or not current or not current.get("sas")
+                    or current.get("state") in ("done", "cancelled", "error")
+                    or ("availableActions" in current and "sas.confirm" not in current["availableActions"])
                     or current.get("id") != shown.get("id") or current.get("sas") != shown.get("sas")):
                 raise Failure("Show the current comparison and obtain the user's match confirmation before confirming it.")
         args = ["verify", step]
@@ -420,7 +471,12 @@ def main():
             emit({"success": False, "error": error.info})
             return 1
         message = str(error) if isinstance(error, Failure) else f"{type(error).__name__}: operation failed; raw details withheld. Check status before retrying."
-        emit({"success": False, "error": message})
+        result = {"success": False, "error": message}
+        if isinstance(error, Failure) and error.code is not None:
+            result["errorCode"] = error.code
+        if isinstance(error, Failure) and getattr(error, "write_outcome", None):
+            result["writeOutcome"] = error.write_outcome
+        emit(result)
         return 1
     return 0
 

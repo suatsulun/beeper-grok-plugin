@@ -35,3 +35,9 @@ The full export produces transcripts, message JSON, a manifest, and resumable ch
 Keep reports and exports in a private persistent output directory, outside the plugin checkout. Attach only the requested report or export through Grok's normal user-facing file tools. Never include Server backups, authentication files, or keys. Generating a report does not authorize sending it to another person or marking its chats read.
 
 For recurring reports, use Grok's actual scheduler only when requested. Store the agreed scope, timezone, and last completed window with the task, use overlapping windows and de-duplication, and report failures as failures. Don't silently send summaries to a chat or external service.
+
+## Answered questions, unfinished tasks, and export coverage
+
+Answers can be established by content without reply links. Do not count every later self-message as an answer. Separate unanswered questions from unfinished tasks: “I'll book it after lunch” answers the question but leaves booking pending until completion is stated. Keep the current explicit decision and identify what it replaced. Do not resolve ambiguous acknowledgements or equal-timestamp events by inventing an order. Retain uncertainty when context is insufficient.
+
+The helper repairs per-chat export pagination and writes JSON atomically after bounded retrieval succeeds. Date bounds are inclusive and require timezones. Inspect `limitReached` and coverage. Per-chat exports have no resumable checkpoints; a failed attempt can be rerun to the requested file. The separate native full-export command keeps its own resumable behavior and upstream limitations. Neither exit success nor an export manifest establishes complete history beyond what Server exposes.

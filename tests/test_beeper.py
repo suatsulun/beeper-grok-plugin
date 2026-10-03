@@ -168,7 +168,7 @@ class RuntimeTests(RuntimeFixture):
     def test_inherited_credentials_and_target_are_ignored(self):
         self.existing()
         with patch.dict(os.environ, {"BEEPER_ACCESS_TOKEN": "OTHER_SECRET", "BEEPER_TARGET": "another-target", "BEEPER_CLI_CONFIG_DIR": "/wrong"}):
-            data = self.runtime.command(["messages", "list", "--chat", "chat-1"])
+            data = self.runtime.cli(["messages", "list", "--chat", "chat-1"])
         self.assertEqual(data["tokenUsed"], "SYNTHETIC_SECRET")
         self.assertEqual(data["envTarget"], "grok-bot")
         self.assertEqual(data["config"], str(self.runtime.config))
@@ -330,7 +330,7 @@ class RuntimeTests(RuntimeFixture):
     def test_exports_handle_native_non_json_success(self):
         self.existing()
         output = self.root / "messages.json"
-        self.assertTrue(self.runtime.command(["messages", "export", "--chat", "chat-1", "--output", str(output)])["completed"])
+        self.assertTrue(self.runtime.cli(["messages", "export", "--chat", "chat-1", "--output", str(output)])["completed"])
         self.assertEqual(output.read_text(), "[]")
         self.assertTrue(self.runtime.command(["export", "--out", str(self.root / "export")])["completed"])
 
@@ -410,8 +410,12 @@ class RuntimeTests(RuntimeFixture):
         self.assertLess(time.monotonic() - start, 4)
         pid = int((self.root / "child.pid").read_text())
         stat = Path(f"/proc/{pid}/stat")
-        if stat.exists():
-            self.assertEqual(stat.read_text().split()[2], "Z")
+        try:
+            state = stat.read_text().split()[2]
+        except (FileNotFoundError, ProcessLookupError):
+            # A killed child can be reaped between opening and reading /proc.
+            return
+        self.assertEqual(state, "Z")
 
     def test_program_backup_follows_official_launcher_symlink(self):
         self.existing()
