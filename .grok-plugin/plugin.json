@@ -1,6 +1,6 @@
 {
   "name": "beeper",
-  "version": "0.7.7",
+  "version": "0.7.8",
   "description": "Approve one shared Beeper cloud setup, sign in to your existing account, and use messaging skills from every device on your Grok account.",
   "author": {
     "name": "Suat Sülün",

@@ -21,7 +21,7 @@ import urllib.parse
 import urllib.request
 
 TARGET = "grok-bot"
-VERSION = "0.7.7"
+VERSION = "0.7.8"
 SETUP = "/v1/app/setup"
 INSTALL_SCOPE = "beeper-cloud-install-v1"
 INSTALL_PROMPT = ("May I install Beeper CLI and Beeper Server on your shared Grok cloud computer? "
@@ -416,9 +416,11 @@ class Runtime:
             raise Failure("Use a messaging command, or setup/status/verify for Beeper account setup.")
         if args[0] == "accounts" and (len(args) < 2 or args[1] not in ("list", "show", "--help")):
             raise Failure("Only existing accounts are supported. Adding, reconnecting, and removing accounts are outside this plugin.")
-        from outcomes import is_message_write, run_write
+        from outcomes import is_message_write, reconcile, run_write
         if is_message_write(args):
             return run_write(self, args)
+        if args[:2] == ["messages", "reconcile"]:
+            return reconcile(self, args)
         blocked = ("--target", "--base-url", "--debug", "--no-json", "--events", "--ids")
         # Only long options: short clusters such as -qtother can hide a target override.
         if any(a.split("=", 1)[0] in blocked or re.match(r"^-[A-Za-z]", a) for a in args):

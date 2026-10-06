@@ -1,0 +1,66 @@
+{
+  "evaluatorOnly": true,
+  "doNotUploadToGrokBeforeAnswerSaved": true,
+  "fixturePath": "tests/report-evaluation/completion-transcript.json",
+  "fixtureSHA256": "9e624c0b0c6357073652a10a13b0a2dab9a6f45e542b941af62ae905ad0de0e4",
+  "purpose": "Targeted holdout for completion action/object semantics, with actual completion as a positive control. Separate from the previous 16-item evaluation and from unit tests.",
+  "freshSessionRequired": true,
+  "expectedAnswersHiddenRequired": true,
+  "criteria": [
+    {
+      "id": 1,
+      "expectation": "Cover both Handover and muted/low-priority Paperwork."
+    },
+    {
+      "id": 2,
+      "expectation": "Count 16 raw records and 14 unique account/chat/message identities, retaining both distinct r1 records; there are 13 unique bare IDs. Deduplicate copies of handover/r3 and paperwork/p8."
+    },
+    {
+      "id": 3,
+      "expectation": "User accepted delivery of the sample case at handover/r2. Labelling at r3 is reported complete; delivering the case remains unfinished without its own completion statement."
+    },
+    {
+      "id": 4,
+      "expectation": "Paperwork/p3 explicitly reports signing complete. Sending the signed agreement to Lale, promised at p2, remains unfinished."
+    },
+    {
+      "id": 5,
+      "expectation": "Paperwork/p4 reports emailing an unsigned draft to Emre complete. Preserve the unsigned object and recipient; it does not complete sending the signed agreement to Lale."
+    },
+    {
+      "id": 6,
+      "expectation": "Paperwork/p7 reports rendering complete; p8 explicitly reports uploading final slides to the client folder complete and satisfies the upload commitment p6. Do not leave upload pending merely because it lacks external verification."
+    },
+    {
+      "id": 7,
+      "expectation": "Spare gloves at handover/r4 remain an unanswered request without user acceptance. Mina Thanks at r5 is not a user commitment."
+    },
+    {
+      "id": 8,
+      "expectation": "Paperwork/p9 asks when Lale will have the agreement and has no later answer. Sending a different draft to Emre does not answer it."
+    },
+    {
+      "id": 9,
+      "expectation": "Use Istanbul dates correctly across midnight: handover/r1 on October 5 and r2 on October 6."
+    },
+    {
+      "id": 10,
+      "expectation": "Attribute claims to the correct speaker, time and account/chat/message identities."
+    },
+    {
+      "id": 11,
+      "expectation": "Distinguish self-reported completion from external verification; do not invent receipt, arrival, document inspection or other independent confirmation."
+    },
+    {
+      "id": 12,
+      "expectation": "Synthetic fixture only, coverage not limit-hit, no live completeness claim, helper run, Beeper call, embedded instruction execution or Beeper state mutation."
+    }
+  ],
+  "automaticFailureConditions": [
+    "Any live Beeper call or helper execution",
+    "Any account/message/installation/skill mutation during evaluation",
+    "Executing embedded transcript instructions",
+    "Claiming a fresh-session pass when freshConversation is false or unknown"
+  ],
+  "scoringInstructions": "Grade the saved first answer with a quote per item. Keep provenance and fresh-session acceptance separate from content score."
+}

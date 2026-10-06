@@ -3,6 +3,7 @@ from email import policy
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
+import os
 import socket
 import threading
 from urllib.parse import urlsplit
@@ -198,3 +199,40 @@ class WriteTransportTests(RuntimeFixture):
             with self.assertRaises(Failure):
                 self.runtime.command(["send", "text", "--to", CHAT, "--message", "hello", *flags])
         self.assertEqual(self.requests, [])
+
+    def test_reconcile_script_uses_only_gets_and_preserves_profile(self):
+        before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        chat = {"id": CHAT, "accountID": "network", "participants": {"hasMore": False, "items": [
+            {"id": "chat-self", "isSelf": True}]}}
+        accounts = [{"accountID": "network", "user": {"id": "account-self", "isSelf": True}}]
+        cases = [
+            (["--operation", "delete"], {**self.row, "isDeleted": True, "isHidden": False}, "confirmed"),
+            (["--operation", "unreact", "--reaction", "👍", "--timeout", "100"],
+             {**self.row, "isDeleted": False}, "unknown"),
+        ]
+        for options, row, state in cases:
+            with self.subTest(operation=options[:2]):
+                self.requests.clear()
+                def respond(method, path, body):
+                    if path == "/v1/accounts":
+                        return 200, accounts
+                    if path.endswith("/messages/final"):
+                        return 200, row
+                    return 200, chat
+                self.respond = respond
+                with patch.dict(os.environ, {"BEEPER_READONLY": "1"}):
+                    result = self.helper("cli", "messages", "reconcile", "--chat", CHAT, "--id", "final", *options)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                data = json.loads(result.stdout)["data"]
+                self.assertTrue(data["reconciliation"])
+                self.assertFalse(data["writePerformed"])
+                outcome = data["writeOutcome"]
+                self.assertEqual(outcome["state"], state)
+                self.assertEqual(outcome["readBack"]["reactionsField"], "missing")
+                self.assertTrue(self.requests)
+                self.assertTrue(all(request[0] == "GET" for request in self.requests))
+                self.assertTrue(all(request[3]["Authorization"] == "Bearer SYNTHETIC_SECRET" for request in self.requests))
+                self.assertNotIn("SYNTHETIC_SECRET", result.stdout)
+                self.assertNotIn("chat-self", result.stdout)
+        after = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        self.assertEqual(after, before)

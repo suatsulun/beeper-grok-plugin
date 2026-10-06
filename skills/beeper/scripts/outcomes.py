@@ -21,15 +21,22 @@ SCHEMAS = {
     ("messages", "edit"): ({"chat", "id", "message", "pick"}, set(), {"chat", "id", "message"}),
     ("messages", "delete"): ({"chat", "id", "pick"}, {"for-everyone"}, {"chat", "id"}),
 }
+RECONCILE_SCHEMA = ({"chat", "id", "pending-message-id", "operation", "message", "reply-to", "mention", "caption", "reaction", "pick"},
+                    {"for-everyone"}, {"chat", "operation"})
+RECONCILE_EXPECTATIONS = {
+    "text": {"message", "reply-to", "mention"}, "edit": {"message"},
+    "file": {"caption", "reply-to"}, "voice": {"reply-to"}, "sticker": {"reply-to"},
+    "react": {"reaction"}, "unreact": {"reaction"}, "delete": {"for-everyone"},
+}
 
 
 def is_message_write(args):
     return tuple(args[:2]) in SCHEMAS
 
 
-def write_options(args):
+def write_options(args, schema=None):
     """Parse option positions, preserving flag-like values and rejecting overrides."""
-    values, switches, required = SCHEMAS[tuple(args[:2])]
+    values, switches, required = schema if schema is not None else SCHEMAS[tuple(args[:2])]
     values, switches = values | GLOBAL_VALUES, switches | GLOBAL_SWITCHES
     flags, native = {}, list(args[:2])
     index = 2
@@ -97,6 +104,46 @@ def run_write(runtime, args):
     return result
 
 
+def reconcile(runtime, args):
+    """Observe an earlier write without dispatching, uploading, or changing state."""
+    flags, _ = write_options(args, RECONCILE_SCHEMA)
+    if flags.get("help"):
+        return {"help": "messages reconcile --chat CHAT --operation text|edit|file|voice|sticker|react|unreact|delete "
+                        "(--id MESSAGE | --pending-message-id PENDING) [expected fields]\n"
+                        "Text/edit require --message; react/unreact require --reaction. Optional fields: "
+                        "--reply-to, --mention (repeatable), --caption, --for-everyone as appropriate to the operation. "
+                        "Pending IDs are for sends only. GET-only, including in read-only mode. "
+                        "Default: up to four reads/eight seconds. --timeout (e.g. 30000 or 30s, maximum 5m) "
+                        "permits continued read-only observation. No write acknowledgement is created."}
+    operation = flags["operation"]
+    if operation not in RECONCILE_EXPECTATIONS:
+        raise Failure("Choose a supported message operation to reconcile.", "invalid_arguments")
+    identifiers = [key for key in ("id", "pending-message-id") if key in flags]
+    if len(identifiers) != 1 or not flags[identifiers[0]]:
+        raise Failure("Supply exactly one nonempty --id or --pending-message-id.", "invalid_arguments")
+    sending = operation in {"text", "file", "voice", "sticker"}
+    if "pending-message-id" in flags and not sending:
+        raise Failure("Pending message IDs can only reconcile sends.", "invalid_arguments")
+    common = {"chat", "id", "pending-message-id", "operation", "pick", "timeout"} | GLOBAL_SWITCHES
+    if flags.keys() - common - RECONCILE_EXPECTATIONS[operation]:
+        raise Failure("Expected fields must match the operation being reconciled.", "invalid_arguments")
+    required = {"message"} if operation in {"text", "edit"} else {"reaction"} if operation in {"react", "unreact"} else set()
+    if any(key not in flags for key in required) or ("reaction" in required and not flags["reaction"]):
+        raise Failure("Text/edit require --message; react/unreact require a nonempty --reaction.", "invalid_arguments")
+    timeout = validate(flags) if "timeout" in flags else OBSERVATION_SECONDS
+    if "timeout" in flags:
+        flags.update(wait=True, **{"wait-timeout": timeout * 1000})
+    # An exact ID avoids even a CLI process. Selectors use the existing read-only lookup.
+    chat = chat_id(runtime, flags["chat"], int(flags["pick"]) if flags.get("pick") else None, timeout=timeout)
+    data = {"chatID": chat}
+    if sending:
+        data["pendingMessageID" if "pending-message-id" in flags else "id"] = flags.get("pending-message-id", flags.get("id"))
+    ident = flags.get("pending-message-id", flags.get("id"))
+    return {"reconciliation": True, "writePerformed": False, "operation": operation,
+            "chatID": chat, "requestedMessageID": ident,
+            "writeOutcome": observe(runtime, operation, chat, data, flags)}
+
+
 def observe(runtime, operation, chat, data, expected):
     data = data if isinstance(data, dict) else {}
     if data.get("chatID", chat) != chat:
@@ -111,6 +158,7 @@ def observe(runtime, operation, chat, data, expected):
     waiting = expected.get("wait", False)
     deadline = time.monotonic() + (expected.get("wait-timeout", 30000) / 1000 if waiting else OBSERVATION_SECONDS)
     attempts = 0
+    observations = []
     accounts_cache = None
     chat_cache = None
     last = observation("unknown", "Read-back has not established the effect.", chatID=chat, messageID=ident)
@@ -150,15 +198,30 @@ def observe(runtime, operation, chat, data, expected):
         except Exception:
             last = observation("unknown", "Read-back had an unexpected shape; no write was repeated.", chatID=chat, messageID=ident)
             retry = False
+        # Keep the decisions from each read, not raw message bodies, participant IDs,
+        # media URLs, receipt maps, or free-form upstream errors. A later failed read
+        # must not erase the earlier evidence or alter the original acknowledgement.
+        observations.append({"attempt": attempts, **last})
         if not retry:
-            return {**last, "readAttempts": attempts, "observationExhausted": False}
-    return {**last, "readAttempts": attempts, "observationExhausted": True}
+            return {**last, "readAttempts": attempts, "observationExhausted": False, "observations": observations}
+    return {**last, "readAttempts": attempts, "observationExhausted": True, "observations": observations}
 
 
 def text_matches(actual, expected):
     # Only equivalent transport newlines are normalized. Stripping Markdown/HTML
     # could falsely confirm changed content, links, mentions or formatting.
     return isinstance(actual, str) and actual.replace("\r\n", "\n") == expected.replace("\r\n", "\n")
+
+
+def field_state(row, key, kind):
+    if key not in row:
+        return "missing"
+    value = row[key]
+    if value is None:
+        return "null"
+    if not isinstance(value, kind):
+        return "invalid"
+    return "present" if value else "empty"
 
 
 def assess_reaction(operation, chat, row, expected, accounts, chat_details, details):
@@ -194,8 +257,17 @@ def assess_reaction(operation, chat, row, expected, accounts, chat_details, deta
         and isinstance(r.get("reactionKey"), str) and bool(r["reactionKey"]) for r in reactions)
     checks = {"accountIdentityAvailable": bool(account_ids), "chatSelfIdentityAvailable": bool(self_ids),
               "reactionStateAvailable": available}
+    if isinstance(reactions, list) and not available:
+        details["readBack"]["reactionsField"] = "invalid"
+    if available:
+        details["readBack"]["reactionCount"] = len(reactions)
     if not identities or not available:
-        return observation("unknown", "Own reaction identity or reaction state is unavailable.", checks=checks, **details), True
+        reason = "Own reaction identity is unavailable." if not identities else {
+            "missing": "The reactions field is missing; absence of the own reaction is not established.",
+            "null": "The reactions field is null; absence of the own reaction is not established.",
+            "invalid": "Reaction state is malformed; absence of the own reaction is not established.",
+        }[details["readBack"]["reactionsField"]]
+        return observation("unknown", reason, checks=checks, **details), True
     same_key = [r for r in reactions if r["reactionKey"] == expected.get("reaction")]
     account_match = any(r["participantID"] in account_ids for r in same_key)
     self_match = any(r["participantID"] in self_ids for r in same_key)
@@ -218,7 +290,13 @@ def assess(operation, chat, known_final_id, row, expected, accounts, chat_detail
                            chatID=chat, messageID=known_final_id, scopeMismatch=True), False
     if known_final_id and row["id"] != known_final_id:
         return observation("unknown", "Read-back returned a different message.", chatID=chat, messageID=known_final_id), False
-    details = {"chatID": chat, "messageID": row["id"]}
+    read_back = {"textField": field_state(row, "text", str),
+                 "reactionsField": field_state(row, "reactions", list),
+                 "attachmentsField": field_state(row, "attachments", list)}
+    for key in ("isDeleted", "isHidden"):
+        if isinstance(row.get(key), bool):
+            read_back[key] = row[key]
+    details = {"chatID": chat, "messageID": row["id"], "readBack": read_back}
     status = (row.get("sendStatus") or {}).get("status")
     details["bridgeSendStatus"] = status or "unavailable"
     if sending and status in {"FAIL_PERMANENT", "FAIL_RETRIABLE", "FAILED"}:

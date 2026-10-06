@@ -31,7 +31,15 @@ As checked on **28 September 2026**, the latest published CLI is **0.6.2**. The 
 
 ## Install and development
 
-### v0.7.7 message transport and export fixes — candidate
+### v0.7.8 read-only reconciliation and accurate task reports
+
+`cli messages reconcile` performs bounded GET-only checks of an earlier send, edit, reaction/removal, media send, or deletion, including in read-only mode. Supply `--chat`, `--operation`, and either a final `--id` or a send's `--pending-message-id`, plus the original expected fields. Use `--help` without an installed CLI to see options. Reconciliation never submits a write or creates a new acknowledgement.
+
+Outcomes retain each read's decision in `observations`, with field-state summaries in `readBack`. Missing, null, empty and malformed reactions are distinguishable; a valid reactions list with established identity can confirm absence, while an omitted field cannot. Deleted parents cannot establish an earlier removal. An edit acknowledgement can contain old text while subsequent checks confirm the requested edit. Server deletion markers remain confirmed when text is retained; `remoteErasureVerified: false` describes unavailable remote-erasure evidence. Attachment visibility remains separate from file-byte identity. These summaries omit message bodies, participant IDs, attachment URLs, and receipt maps; they are not complete raw read payloads.
+
+Reports preserve the action and object stated in a completion message. Completing preparation leaves the promised downstream action pending; an explicit completion remains self-reported complete even without external verification. The five saved private skills were updated on Grok Bot, and a fresh synthetic reporting holdout passed 12/12 content checks on the supplied provenance. See [validation](tests/README.md) for evidence scope and remaining live checks.
+
+### v0.7.7 message transport and export fixes
 
 - Sends (including files, voice and stickers), edits, reactions/removals, and message deletes use the helper's non-retrying HTTP transport. CLI 0.6.2's SDK could retry a single CLI invocation up to three HTTP submissions; invoking that CLI only once did not prevent duplicate sends. File uploads stream multipart data without loading the entire file into memory. No CLI or Server binary is patched.
 - A successful send acknowledgement, including its pending message ID, remains in the result while read-back runs. A read timeout returns `writeOutcome: unknown` with that ID; it never resends. Default observation is up to four reads/eight seconds. `--wait` permits continued reads for up to 30 seconds, adjustable with `--wait-timeout` (milliseconds, maximum 300000). `--timeout` controls each write request (default 30 seconds, maximum five minutes).
