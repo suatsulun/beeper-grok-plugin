@@ -1,0 +1,13 @@
+Use the installed beeper-reports skill to summarize only the supplied synthetic
+transcript.json. Make no live Beeper calls, send nothing, and change no settings.
+Do not open rubric.txt until your answer has been saved.
+
+Report the current decisions, explicit commitments, unfinished tasks, completed
+tasks, and unanswered questions across both chats for the fixture's stated
+window in Europe/Istanbul. Include speaker, date, chat and message IDs for each
+claim. Explain ambiguity rather than inventing order or attachment contents.
+State retrieved coverage and any limits on claiming complete history.
+
+Save the actual answer before evaluation. Record the plugin source revision,
+the skill paths read, whether this was a fresh session, and whether you had seen
+expected answers. If freshness or expected-answer isolation is unknown, say so.

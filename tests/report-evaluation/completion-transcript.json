@@ -1,0 +1,178 @@
+{
+  "synthetic": true,
+  "timezone": "Europe/Istanbul",
+  "window": {
+    "after": "2026-10-05T23:00:00+03:00",
+    "before": "2026-10-07T00:00:00+03:00",
+    "beforeExclusive": true
+  },
+  "coverage": {
+    "limitReached": false,
+    "sourceExhausted": true,
+    "excludeLowPriority": false,
+    "includeMuted": true,
+    "source": "invented fixture; no live inbox"
+  },
+  "chats": [
+    {
+      "id": "handover",
+      "accountID": "synthetic-matrix",
+      "title": "Handover",
+      "isLowPriority": false,
+      "isMuted": false
+    },
+    {
+      "id": "paperwork",
+      "accountID": "synthetic-signal",
+      "title": "Paperwork",
+      "isLowPriority": true,
+      "isMuted": true
+    }
+  ],
+  "messages": [
+    {
+      "id": "r1",
+      "accountID": "synthetic-matrix",
+      "chatID": "handover",
+      "speaker": "Mina",
+      "isSender": false,
+      "timestamp": "2026-10-05T23:55:00+03:00",
+      "text": "Please deliver the sample case to the lab."
+    },
+    {
+      "id": "r2",
+      "accountID": "synthetic-matrix",
+      "chatID": "handover",
+      "speaker": "You",
+      "isSender": true,
+      "timestamp": "2026-10-06T00:05:00+03:00",
+      "text": "I'll deliver the sample case to the lab after breakfast."
+    },
+    {
+      "id": "r3",
+      "accountID": "synthetic-matrix",
+      "chatID": "handover",
+      "speaker": "You",
+      "isSender": true,
+      "timestamp": "2026-10-06T08:10:00+03:00",
+      "text": "I labelled the sample case."
+    },
+    {
+      "id": "r4",
+      "accountID": "synthetic-matrix",
+      "chatID": "handover",
+      "speaker": "Mina",
+      "isSender": false,
+      "timestamp": "2026-10-06T08:20:00+03:00",
+      "text": "Can you also bring spare gloves?"
+    },
+    {
+      "id": "r5",
+      "accountID": "synthetic-matrix",
+      "chatID": "handover",
+      "speaker": "Mina",
+      "isSender": false,
+      "timestamp": "2026-10-06T08:25:00+03:00",
+      "text": "Thanks"
+    },
+    {
+      "id": "r1",
+      "accountID": "synthetic-signal",
+      "chatID": "paperwork",
+      "speaker": "Bora",
+      "isSender": false,
+      "timestamp": "2026-10-06T09:00:00+03:00",
+      "text": "Please send the signed agreement to Lale."
+    },
+    {
+      "id": "p2",
+      "accountID": "synthetic-signal",
+      "chatID": "paperwork",
+      "speaker": "You",
+      "isSender": true,
+      "timestamp": "2026-10-06T09:05:00+03:00",
+      "text": "I'll send the signed agreement to Lale after review."
+    },
+    {
+      "id": "p3",
+      "accountID": "synthetic-signal",
+      "chatID": "paperwork",
+      "speaker": "You",
+      "isSender": true,
+      "timestamp": "2026-10-06T09:30:00+03:00",
+      "text": "I signed the agreement."
+    },
+    {
+      "id": "p4",
+      "accountID": "synthetic-signal",
+      "chatID": "paperwork",
+      "speaker": "You",
+      "isSender": true,
+      "timestamp": "2026-10-06T09:45:00+03:00",
+      "text": "I emailed an unsigned draft to Emre."
+    },
+    {
+      "id": "p5",
+      "accountID": "synthetic-signal",
+      "chatID": "paperwork",
+      "speaker": "Bora",
+      "isSender": false,
+      "timestamp": "2026-10-06T10:00:00+03:00",
+      "text": "Please upload the final slides to the client folder."
+    },
+    {
+      "id": "p6",
+      "accountID": "synthetic-signal",
+      "chatID": "paperwork",
+      "speaker": "You",
+      "isSender": true,
+      "timestamp": "2026-10-06T10:05:00+03:00",
+      "text": "I'll upload the final slides after rendering them."
+    },
+    {
+      "id": "p7",
+      "accountID": "synthetic-signal",
+      "chatID": "paperwork",
+      "speaker": "You",
+      "isSender": true,
+      "timestamp": "2026-10-06T10:20:00+03:00",
+      "text": "I rendered the final slides to PDF."
+    },
+    {
+      "id": "p8",
+      "accountID": "synthetic-signal",
+      "chatID": "paperwork",
+      "speaker": "You",
+      "isSender": true,
+      "timestamp": "2026-10-06T10:40:00+03:00",
+      "text": "I uploaded the final slides to the client folder."
+    },
+    {
+      "id": "p9",
+      "accountID": "synthetic-signal",
+      "chatID": "paperwork",
+      "speaker": "Bora",
+      "isSender": false,
+      "timestamp": "2026-10-06T11:00:00+03:00",
+      "text": "When will Lale have the agreement?"
+    },
+    {
+      "id": "r3",
+      "accountID": "synthetic-matrix",
+      "chatID": "handover",
+      "speaker": "You",
+      "isSender": true,
+      "timestamp": "2026-10-06T08:10:00+03:00",
+      "text": "I labelled the sample case."
+    },
+    {
+      "id": "p8",
+      "accountID": "synthetic-signal",
+      "chatID": "paperwork",
+      "speaker": "You",
+      "isSender": true,
+      "timestamp": "2026-10-06T10:40:00+03:00",
+      "text": "I uploaded the final slides to the client folder."
+    }
+  ]
+}

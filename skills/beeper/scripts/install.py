@@ -27,7 +27,7 @@ def request(url):
     # Public release downloads need no API call or GitHub credential.
     try:
         return urllib.request.urlopen(urllib.request.Request(
-            url, headers={"User-Agent": "beeper-grok-plugin/0.7.2"}), timeout=120)
+            url, headers={"User-Agent": "beeper-grok-plugin/0.7.4"}), timeout=120)
     except urllib.error.HTTPError as error:
         status, headers = error.code, error.headers
         error.close()
